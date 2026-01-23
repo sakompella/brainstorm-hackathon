@@ -9,7 +9,6 @@ and sends arrow key presses as control messages to move the array position.
 import asyncio
 import json
 import sys
-from typing import Optional
 
 import typer
 import websockets
@@ -29,10 +28,10 @@ class ControlClient:
         self.host = host
         self.port = port
         self.url = f"ws://{host}:{port}/control"
-        self.websocket: Optional[websockets.ClientConnection] = None
+        self.websocket: websockets.ClientConnection | None = None
         self.running = False
         self.connected = False
-        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self.loop: asyncio.AbstractEventLoop | None = None
 
     async def connect(self) -> None:
         """Connect to the control endpoint."""
