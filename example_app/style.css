@@ -138,13 +138,12 @@ main {
     border-radius: 4px;
     background: linear-gradient(
         to bottom,
-        #fcfdbf,
-        #feca8d,
-        #f1605d,
-        #b73779,
-        #721f81,
-        #2c115f,
-        #000004
+        #ff00ff 0%,
+        #220022 20%,
+        #000000 35%,
+        #000000 65%,
+        #002222 80%,
+        #00ffff 100%
     );
 }
 
