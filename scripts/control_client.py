@@ -29,7 +29,7 @@ class ControlClient:
         self.host = host
         self.port = port
         self.url = f"ws://{host}:{port}/control"
-        self.websocket: Optional[websockets.WebSocketClientProtocol] = None
+        self.websocket: Optional[websockets.ClientConnection] = None
         self.running = False
         self.connected = False
         self.loop: Optional[asyncio.AbstractEventLoop] = None
@@ -39,7 +39,7 @@ class ControlClient:
         try:
             self.websocket = await websockets.connect(self.url)
             self.connected = True
-            
+
             # Wait for acknowledgment
             try:
                 message = await asyncio.wait_for(self.websocket.recv(), timeout=1.0)
@@ -47,10 +47,12 @@ class ControlClient:
                 if data.get("type") == "control_ack":
                     console.print(f"[green]✓ Connected to {self.url}[/green]")
             except asyncio.TimeoutError:
-                console.print(f"[yellow]Connected to {self.url} (no acknowledgment received)[/yellow]")
+                console.print(
+                    f"[yellow]Connected to {self.url} (no acknowledgment received)[/yellow]"
+                )
             except Exception:
                 pass
-                
+
         except ConnectionRefusedError:
             console.print(f"[red]✗ Error: Could not connect to {self.url}[/red]")
             console.print("[dim]Make sure the streaming server is running[/dim]")
@@ -63,7 +65,7 @@ class ControlClient:
         """Send a key press/release event to the server."""
         if not self.connected or self.websocket is None:
             return
-        
+
         message = {
             "type": "key",
             "key": key,
@@ -79,7 +81,7 @@ class ControlClient:
         """Send a direct position update to the server."""
         if not self.connected or self.websocket is None:
             return
-        
+
         message = {
             "type": "position",
             "x": x,
@@ -143,9 +145,9 @@ class ControlClient:
         """Run the control client."""
         # Store event loop for thread-safe async calls
         self.loop = asyncio.get_event_loop()
-        
+
         await self.connect()
-        
+
         # Create status panel
         status_text = Text()
         status_text.append("Arrow Keys: ", style="bold cyan")
@@ -154,12 +156,22 @@ class ControlClient:
         status_text.append("Press ", style="dim")
         status_text.append("Ctrl+C", style="bold")
         status_text.append(" to exit", style="dim")
-        
+
         console.print()
-        console.print(Panel(status_text, title="[bold cyan]Control Client[/bold cyan]", border_style="cyan"))
+        console.print(
+            Panel(
+                status_text,
+                title="[bold cyan]Control Client[/bold cyan]",
+                border_style="cyan",
+            )
+        )
         console.print()
-        console.print("[dim]Click away from this terminal to keep the display clean![/dim]")
-        console.print("[dim]Arrow keys will work globally to control the array position.[/dim]")
+        console.print(
+            "[dim]Click away from this terminal to keep the display clean![/dim]"
+        )
+        console.print(
+            "[dim]Arrow keys will work globally to control the array position.[/dim]"
+        )
         console.print()
 
         # Setup keyboard listener
