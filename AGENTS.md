@@ -107,6 +107,24 @@ Typical progression (see `docs/data.md` + `docs/getting_started.md`):
 - Do not modify streaming protocols without strong justification; coordinate updates across streamer, middleware, and frontend.
 - If anything fails (commands, tests, servers), stop, explain the failure, and request guidance before continuing.
 
+## Python code style 
+- Focus on a functional-like style that is simple to read
+- Avoid not obvious side effects, and document when not avoidable (or unideomatic)
+- Use `@dataclass(frozen=True, slots=True)` for necessary data types
+- Type hints everywhere - function signatures, class attributes, returns
+- Use `NewType` for domain types (e.g., `Sha = NewType("Sha", str)`)
+- Union types with `|` syntax, pattern matching with `assert_never()`
+- Immutable sequences: `tuple[str, ...]` not `list[str]`
+- Factory functions over complex constructors
+- Context managers for resource cleanup
+
+### Key Imports
+```python
+from dataclasses import dataclass
+from typing import NewType, assert_never
+from collections.abc import Callable, Iterator
+```
+
 ## Validation + Tooling Notes
 
 - Ruff handles formatting + lint (`make format`, `make lint`).
