@@ -1,99 +1,112 @@
-# CLAUDE.md
+# CLAUDE.md (Updated Jan 23, 2026)
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) when working inside this repository. Keep this file in sync with the current toolchain and architecture described below.
 
-## Project Overview
+## Track Overview
 
-BrainStorm 2026 Track 2: Build a real-time visualization tool to guide neurosurgeons in placing a brain-computer interface array. The app processes live neural data from a 1024-channel micro-ECoG array (32×32 grid, 500 Hz) and identifies velocity-tuned regions.
+BrainStorm 2026 Track 2: build a real-time visualization tool to guide neurosurgeons in positioning a 32×32 (1024 channel) micro-ECoG array. The processing pipeline now supports a FastAPI-based data streamer/server plus an optional Python middleware phase for feature extraction.
 
-## Commands
+## Daily Workflow
 
 ```bash
-# Setup
-make install                              # Install deps + git hooks
+# Install deps + git hooks
+make install
 
-# Download data (start with super_easy, develop with hard)
+# Download datasets (start with super_easy, iterate on hard)
 uv run python -m scripts.download super_easy
 uv run python -m scripts.download hard
 
-# Run (two terminals)
-uv run brainstorm-stream --from-file data/hard/   # Terminal 1: stream data
-uv run brainstorm-serve                            # Terminal 2: serve web app at :8000
+# Run data streamer (FastAPI WebSocket @ ws://localhost:8765)
+uv run brainstorm-stream --from-file data/hard/
 
-# Development
-make format          # ruff format
-make lint            # ruff check --fix
-make type-check      # mypy scripts/
-make test            # pytest
-make check-all       # all of the above
+# Serve frontend (FastAPI static server @ http://localhost:8000)
+uv run brainstorm-serve
+
+# Optional middleware (feature WebSocket relay @ ws://localhost:8787)
+uv run python middleware.py
+
+# Validation helpers
+make format       # ruff format
+make lint         # ruff check --fix
+make type-check   # mypy scripts/
+make test         # pytest
+make check-all    # run format + lint + type + tests
 ```
 
-## Architecture
+## Architecture Snapshot (Jan 2026)
 
 ```
-stream_data.py (ws://localhost:8765)  -->  Web App (browser)
-         |                                      ^
-         |                                      | serves static files
-         v                                      |
-    [Parquet files]                       serve.py (:8000)
+[Parquet files] --uv--> scripts/stream_data.py (FastAPI WebSocket @8765)
+        |                               |
+        | optional                      v
+        +--> middleware.py (feature WebSocket @8787)
+                                        |
+                                        v
+                               Web App (example_app/ or custom)
+                               served via scripts/serve.py (@8000)
 ```
 
-Two approaches supported:
-1. **Direct connection** - Browser connects to WebSocket, processes in JS (like example_app)
-2. **Custom backend** - Python/Node middleware processes data before sending to frontend
+- `scripts/stream_data.py` — FastAPI + uvicorn; streams data at 500 Hz (JSON batches).
+- `middleware.py` — Optional bridge: consumes raw stream, emits activity features (`type="features"`). Keep protocol stable if extending.
+- `scripts/serve.py` — FastAPI static server wrapping `example_app/` (or your replacement app).
+- `scripts/download.py` — HuggingFace helper for datasets (`track2_data.parquet`, `metadata.json`, `ground_truth.parquet`).
+- `scripts/control_client.py` — Sends keyboard commands during live evaluation.
+- `example_app/` — Minimal reference UI (magma heatmap). Replace or extend for your solution.
+- `docs/` — Authoritative specs (overview, data_stream protocol, submission rules, persona, etc.). Always check docs before changing behavior.
 
-### Key Components
+## WebSocket Protocols
 
-- `scripts/stream_data.py` - WebSocket server streaming neural data at 500 Hz (DO NOT MODIFY protocol)
-- `scripts/serve.py` - Static file server for web app
-- `scripts/download.py` - Downloads datasets from HuggingFace
-- `scripts/control_client.py` - Sends keyboard controls during live evaluation
-- `example_app/` - Basic heatmap visualization (starting point, intentionally minimal)
-
-### WebSocket Protocol
-
-Init message:
+Raw stream (`ws://localhost:8765`):
 ```json
-{"type": "init", "channels_coords": [[1,1]...], "grid_size": 32, "fs": 500.0, "batch_size": 10}
+{"type":"init","channels_coords":[[1,1],...],"grid_size":32,"fs":500.0,"batch_size":10}
+{"type":"sample_batch","neural_data":[[...1024 floats...]...],"start_time_s":1.234,"sample_count":10,"fs":500.0}
 ```
 
-Sample batch (50 messages/sec):
+Middleware features (`ws://localhost:8787`):
 ```json
-{"type": "sample_batch", "neural_data": [[...1024 values...]...], "start_time_s": 1.234, "sample_count": 10, "fs": 500.0}
+{"type":"features","activity":[1024 floats],"t":12.34,"presence":0.42,"confidence":1.0,"total_samples":12345}
 ```
+Maintain backward compatibility—evaluation servers expect the raw protocol.
 
-## Data
+## Data + Ground Truth
 
-- 1024 channels in 32×32 grid, 500 Hz sampling
-- Four velocity-tuned regions: Vx+, Vx-, Vy+, Vy- (respond to cursor movement direction)
-- Difficulty levels: super_easy → easy → medium → hard (use hard for final testing)
-- Ground truth available in development only (`ground_truth.parquet`)
+- Channels: 1024, grid ordered row-major.
+- Sampling: 500 Hz batches of `batch_size` samples (default 10 → 50 msgs/sec).
+- Difficulty tiers: `super_easy`, `easy`, `medium`, `hard` (develop/test on `hard`).
+- `ground_truth.parquet` and `metadata.json` only for local iteration; unavailable during live eval.
 
-## Signal Processing Hints
+## Signal Processing Reference
 
-High-gamma band (70-150 Hz) correlates well with motor intent. Typical pipeline:
-1. Bandpass filter (e.g., 70-150 Hz)
-2. Power/envelope extraction
-3. Temporal smoothing (EMA or sliding window)
-4. Reshape to 32×32 grid
-5. Spatial smoothing (optional Gaussian blur)
+Typical progression (see `docs/data.md` + `docs/getting_started.md`):
+1. Bandpass 70–150 Hz (high-gamma) or equivalent feature extraction.
+2. Instantaneous power → log/EMA smoothing (see `middleware.py:ActivityEMA`).
+3. Temporal aggregation (EMA / sliding window) for stability.
+4. Reshape vector → 32×32 grid; optionally apply spatial smoothing or clustering.
+5. Identify directional tuning regions (Vx+/Vx−/Vy+/Vy−) and surface guidance cues.
 
-## Design Constraints
+## Design / UX Constraints
 
-- Must work in operating room environment
-- Readable from 6 feet away (high contrast, large indicators)
-- Identify coherent **areas** of tuned activity, not individual spikes
-- Provide directional guidance for array movement
-- Clear "found it" signal when positioned correctly
+- Operating room usage: high contrast, legible from ~6 ft.
+- Focus on coherent **areas** rather than single-channel spikes.
+- Provide actionable guidance: “move array ↘︎” or clear “locked-on” indicator.
+- Distinguish confidence/presence metrics visually; avoid ambiguous colors.
 
-## Code Writing Guidelines
+## Code Writing Expectations
 
-Do not write code before stating assumptions.
-Do not claim correctness you haven't verified.
-Do not handle only the happy path.
-Prefer self-documenting code over comments. Comments are for when something is not obvious.
-Be concise.
-Ask questions when in doubt. Don't guess.
-When possible, prefer strongly-typed code.
-Lean on the compiler. When the compiler says something is wrong, fix it, don't hack around it.
-**When something fails, STOP. Output your reasoning in full. Do not touch anything more until you understand the actual cause, have articulated it, and stated your expectations, and ask for further instructions.**
+- State explicit assumptions before substantive changes.
+- Never assume the happy path; handle file/network errors and reconnect logic (see `middleware.py`).
+- Prefer self-documenting, typed code (Python typing, TypeScript if used). Avoid unnecessary comments.
+- When FastAPI / uvicorn configs change, verify both CLI entrypoints (`brainstorm-stream`, `brainstorm-serve`).
+- Do not modify streaming protocols without strong justification; coordinate updates across streamer, middleware, and frontend.
+- If anything fails (commands, tests, servers), stop, explain the failure, and request guidance before continuing.
+
+## Validation + Tooling Notes
+
+- Ruff handles formatting + lint (`make format`, `make lint`).
+- Type checking limited to `scripts/` (run `make type-check`).
+- Tests via `pytest` (extend as needed for new backend/frontend logic).
+- Use `uv run <command>` to ensure virtualenv consistency.
+- For frontend work, keep `example_app/` build-less; if introducing bundlers, document steps in `docs/getting_started.md` and update this file.
+
+Keep AGENTS.md updated whenever workflows, commands, or architecture change.
+Thanks! 🚀
