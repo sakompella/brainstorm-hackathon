@@ -16,6 +16,7 @@ dependencies = [
     "pyarrow>=14.0.0",
     "huggingface-hub>=0.20.0",
     "pynput>=1.7.0",
+    "pandas-stubs~=2.3.3",
 ]
 
 [project.scripts]

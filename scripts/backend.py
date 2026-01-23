@@ -3,32 +3,38 @@ Unified Backend Server for Neural Data Viewer.
 
 Acts as:
 1. WebSocket client to stream_data.py (consuming raw data from upstream)
-2. WebSocket server for browser connections (serving data at /ws)
-3. HTTP server for static files
+2. Signal processing middleware (ActivityEMA for per-channel activity)
+3. WebSocket server for browser connections (serving data at /ws)
+4. HTTP server for static files
 
 Architecture:
     [Parquet] --> stream_data.py (WS localhost:8765) --> backend.py (WS client)
                                                     |
-                                         backend.py (WS server + HTTP localhost:8000)
+                                         backend.py (signal processing + WS server + HTTP localhost:8000)
                                                     |
-                                                  Browser
+                                                  Browser (receives "features" messages)
 
 Usage:
     # Start data streamer first
     brainstorm-stream --from-file data/hard/
 
-    # Start unified backend
+    # Start unified backend (with middleware processing enabled by default)
     brainstorm-backend --upstream-url ws://localhost:8765
+
+    # Pass through raw data without processing
+    brainstorm-backend --upstream-url ws://localhost:8765 --no-process
 """
 
 import asyncio
 import contextlib
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import typer
 import uvicorn
 import websockets
@@ -36,6 +42,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+from scripts.signal_processing import ActivityEMA, compute_presence
 
 logger = logging.getLogger("brainstorm.backend")
 
@@ -57,6 +65,11 @@ class SharedState:
 
     message_queue: asyncio.Queue[str] | None = None
     browser_connections: set[WebSocket] = field(default_factory=set)
+
+    ema: ActivityEMA | None = None
+    last_activity: np.ndarray | None = None
+    last_t: float = 0.0
+    total_samples: int = 0
 
 
 class BrowserServer:
@@ -98,6 +111,9 @@ class BrowserServer:
 async def consume_upstream(
     upstream_url: str,
     state: SharedState,
+    process: bool = True,
+    tau_fast_s: float = 0.2,
+    tau_base_s: float = 8.0,
     max_retries: int = 5,
     retry_delay: float = 0.5,
 ) -> None:
@@ -105,7 +121,8 @@ async def consume_upstream(
     Connect as WebSocket client to stream_data.py.
 
     - Parse init message and cache it
-    - Forward sample_batch messages to queue
+    - If process=True: compute ActivityEMA and store features in state
+    - If process=False: forward raw messages to queue
     - Reconnect on failure (max retries with fixed delay)
     """
     retries = 0
@@ -137,7 +154,47 @@ async def consume_upstream(
                             f"fs={state.fs}, batch_size={state.batch_size}"
                         )
 
-                    if state.message_queue is not None and isinstance(msg, str):
+                        if process:
+                            n_ch = state.grid_size**2
+                            state.ema = ActivityEMA(
+                                n_ch=n_ch,
+                                fs=state.fs,
+                                tau_fast_s=tau_fast_s,
+                                tau_base_s=tau_base_s,
+                            )
+                            logger.info(
+                                f"Initialized ActivityEMA: n_ch={n_ch}, "
+                                f"tau_fast={tau_fast_s}s, tau_base={tau_base_s}s"
+                            )
+
+                    elif msg_type == "sample_batch" and process:
+                        if state.ema is None:
+                            n_ch = state.grid_size**2
+                            state.ema = ActivityEMA(
+                                n_ch=n_ch,
+                                fs=state.fs,
+                                tau_fast_s=tau_fast_s,
+                                tau_base_s=tau_base_s,
+                            )
+
+                        batch_samples = data["neural_data"]
+                        start_time_s = float(data.get("start_time_s", 0.0))
+                        sample_count = int(data.get("sample_count", len(batch_samples)))
+                        fs = float(data.get("fs", state.fs))
+
+                        batch = np.asarray(batch_samples, dtype=np.float32)
+                        state.ema.update_batch(batch)
+
+                        last_t = start_time_s + (sample_count - 1) / fs
+                        state.last_activity = state.ema.activity().copy()
+                        state.last_t = last_t
+                        state.total_samples += sample_count
+
+                    if (
+                        not process
+                        and state.message_queue is not None
+                        and isinstance(msg, str)
+                    ):
                         await state.message_queue.put(msg)
 
         except websockets.exceptions.ConnectionClosedError as e:
@@ -164,6 +221,7 @@ async def broadcast_loop(
 ) -> None:
     """
     Consume from state.message_queue and broadcast to all connected browsers.
+    Used when process=False (raw passthrough mode).
     """
     if state.message_queue is None:
         logger.error("Message queue not initialized")
@@ -177,6 +235,57 @@ async def broadcast_loop(
             break
         except Exception as e:
             logger.error(f"Broadcast error: {e}")
+
+
+async def publish_features(
+    server: BrowserServer,
+    state: SharedState,
+    out_hz: float = 20.0,
+) -> None:
+    """
+    Broadcast computed activity features at a fixed rate (e.g., 20 Hz).
+    Used when process=True (middleware processing mode).
+    """
+    period = 1.0 / out_hz
+    last_sent_t = -1.0
+
+    while True:
+        try:
+            t0 = time.perf_counter()
+
+            activity = state.last_activity
+            t = state.last_t
+            connected = state.connected_to_upstream
+            total_samples = state.total_samples
+
+            if activity is not None and t != last_sent_t:
+                presence = compute_presence(activity)
+                confidence = 1.0 if connected else 0.0
+
+                payload = {
+                    "type": "features",
+                    "t": float(t),
+                    "fs": float(state.fs),
+                    "n_ch": state.grid_size**2,
+                    "activity": activity.tolist(),
+                    "presence": presence,
+                    "confidence": confidence,
+                    "total_samples": int(total_samples),
+                }
+                await server.broadcast(json.dumps(payload))
+                last_sent_t = t
+
+            dt = time.perf_counter() - t0
+            sleep_s = period - dt
+            if sleep_s > 0:
+                await asyncio.sleep(sleep_s)
+            else:
+                await asyncio.sleep(0.001)
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Feature publish error: {e}")
 
 
 def create_app(
@@ -263,6 +372,26 @@ def main(
         "-s",
         help="Directory to serve static files from",
     ),
+    process: bool = typer.Option(
+        True,
+        "--process/--no-process",
+        help="Enable signal processing (ActivityEMA). Disable for raw passthrough.",
+    ),
+    tau_fast: float = typer.Option(
+        0.2,
+        "--tau-fast",
+        help="Fast EMA time constant in seconds",
+    ),
+    tau_base: float = typer.Option(
+        8.0,
+        "--tau-base",
+        help="Base EMA time constant in seconds",
+    ),
+    out_hz: float = typer.Option(
+        20.0,
+        "--out-hz",
+        help="Feature broadcast rate in Hz (when processing enabled)",
+    ),
     log_level: str = typer.Option(
         "INFO",
         "--log-level",
@@ -273,11 +402,16 @@ def main(
     """
     Start the unified backend server.
 
-    This server connects to the data stream (stream_data.py) as a WebSocket client
-    and serves both static files and a WebSocket endpoint for browsers.
+    This server connects to the data stream (stream_data.py) as a WebSocket client,
+    optionally processes the signal (ActivityEMA), and serves both static files
+    and a WebSocket endpoint for browsers.
 
-    Example:
+    Examples:
+        # With signal processing (default)
         brainstorm-backend --upstream-url ws://localhost:8765
+
+        # Raw passthrough mode
+        brainstorm-backend --upstream-url ws://localhost:8765 --no-process
     """
     logging.basicConfig(
         level=getattr(logging, log_level.upper(), logging.INFO),
@@ -293,6 +427,13 @@ def main(
     logger.info(f"Upstream URL: {upstream_url}")
     logger.info(f"Server will listen on http://{host}:{port}")
     logger.info(f"WebSocket endpoint: ws://{host}:{port}/ws")
+    logger.info(
+        f"Signal processing: {'enabled' if process else 'disabled (passthrough)'}"
+    )
+    if process:
+        logger.info(
+            f"EMA params: tau_fast={tau_fast}s, tau_base={tau_base}s, out_hz={out_hz}Hz"
+        )
 
     state = SharedState()
     state.message_queue = asyncio.Queue(maxsize=1000)
@@ -301,7 +442,7 @@ def main(
     app = create_app(state, server, static_path)
 
     async def run_server() -> None:
-        """Run uvicorn server with upstream consumer and broadcast loop."""
+        """Run uvicorn server with upstream consumer and broadcast/publish loop."""
         config = uvicorn.Config(
             app,
             host=host,
@@ -311,29 +452,42 @@ def main(
         uvicorn_server = uvicorn.Server(config)
 
         upstream_task = asyncio.create_task(
-            consume_upstream(upstream_url, state),
+            consume_upstream(
+                upstream_url,
+                state,
+                process=process,
+                tau_fast_s=tau_fast,
+                tau_base_s=tau_base,
+            ),
             name="upstream_consumer",
         )
-        broadcast_task = asyncio.create_task(
-            broadcast_loop(server, state),
-            name="broadcast_loop",
-        )
+
+        if process:
+            output_task = asyncio.create_task(
+                publish_features(server, state, out_hz=out_hz),
+                name="feature_publisher",
+            )
+        else:
+            output_task = asyncio.create_task(
+                broadcast_loop(server, state),
+                name="broadcast_loop",
+            )
 
         try:
             await asyncio.gather(
                 uvicorn_server.serve(),
                 upstream_task,
-                broadcast_task,
+                output_task,
             )
         except asyncio.CancelledError:
             logger.info("Shutting down...")
         finally:
             upstream_task.cancel()
-            broadcast_task.cancel()
+            output_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await upstream_task
             with contextlib.suppress(asyncio.CancelledError):
-                await broadcast_task
+                await output_task
 
     with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run_server())

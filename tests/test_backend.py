@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,9 +18,6 @@ from scripts.backend import (
     consume_upstream,
     create_app,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
 
 
 class TestSharedState:
@@ -297,7 +294,8 @@ class TestConsumeUpstream:
         assert state.channels_coords == ((0, 0), (1, 1), (2, 2))
 
     @pytest.mark.asyncio
-    async def test_forwards_messages_to_queue(self) -> None:
+    async def test_forwards_messages_to_queue_passthrough(self) -> None:
+        """Test raw passthrough mode (process=False)."""
         state = SharedState()
         state.message_queue = asyncio.Queue()
 
@@ -320,11 +318,47 @@ class TestConsumeUpstream:
         mock_context.__aexit__.return_value = None
 
         with patch("scripts.backend.websockets.connect", return_value=mock_context):
-            await consume_upstream("ws://test:8765", state, max_retries=1)
+            await consume_upstream(
+                "ws://test:8765", state, process=False, max_retries=1
+            )
 
         assert not state.message_queue.empty()
         queued = await state.message_queue.get()
         assert json.loads(queued)["type"] == "sample_batch"
+
+    @pytest.mark.asyncio
+    async def test_processes_sample_batch_with_ema(self) -> None:
+        """Test signal processing mode (process=True, default)."""
+        state = SharedState()
+        state.message_queue = asyncio.Queue()
+
+        batch_msg = json.dumps(
+            {
+                "type": "sample_batch",
+                "neural_data": [[0.5] * 1024],
+                "start_time_s": 1.0,
+                "sample_count": 1,
+            }
+        )
+
+        async def mock_message_iter():
+            yield batch_msg
+
+        mock_ws = AsyncMock()
+        mock_ws.__aiter__ = lambda self: mock_message_iter()
+
+        mock_context = AsyncMock()
+        mock_context.__aenter__.return_value = mock_ws
+        mock_context.__aexit__.return_value = None
+
+        with patch("scripts.backend.websockets.connect", return_value=mock_context):
+            await consume_upstream("ws://test:8765", state, process=True, max_retries=1)
+
+        assert state.ema is not None
+        assert state.last_activity is not None
+        assert len(state.last_activity) == 1024
+        assert state.total_samples == 1
+        assert state.message_queue.empty()
 
     @pytest.mark.asyncio
     async def test_retries_on_connection_failure(self) -> None:
@@ -381,7 +415,9 @@ class TestBroadcastLoop:
         assert mock_ws.send_text.call_count >= 2
 
     @pytest.mark.asyncio
-    async def test_handles_missing_queue(self, caplog: pytest.LogCaptureFixture) -> None:
+    async def test_handles_missing_queue(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         state = SharedState()
         server = BrowserServer(state)
 

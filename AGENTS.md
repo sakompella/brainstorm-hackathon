@@ -37,8 +37,8 @@ make check-all    # run format + lint + type + tests
 ```
 
 - `scripts/stream_data.py` — FastAPI + uvicorn; streams data at 500 Hz (JSON batches).
-- `scripts/backend.py` — Unified backend: WebSocket client to stream_data.py + WebSocket server for browsers at `/ws` + static file server.
-- `middleware.py` — Optional bridge: consumes raw stream, emits activity features (`type="features"`). Keep protocol stable if extending.
+- `scripts/backend.py` — Unified backend: WebSocket client to stream_data.py + signal processing + WebSocket server for browsers at `/ws` + static file server.
+- `scripts/signal_processing.py` — Signal processing module: `ActivityEMA` for per-channel activity, `compute_presence` for global indicator.
 - `scripts/serve.py` — FastAPI static server wrapping `frontend/` (legacy, for direct browser-to-stream connection).
 - `scripts/download.py` — HuggingFace helper for datasets (`track2_data.parquet`, `metadata.json`, `ground_truth.parquet`).
 - `scripts/control_client.py` — Sends keyboard commands during live evaluation.
@@ -70,7 +70,7 @@ Maintain backward compatibility—evaluation servers expect the raw protocol.
 
 Typical progression (see `docs/data.md` + `docs/getting_started.md`):
 1. Bandpass 70–150 Hz (high-gamma) or equivalent feature extraction.
-2. Instantaneous power → log/EMA smoothing (see `middleware.py:ActivityEMA`).
+2. Instantaneous power → log/EMA smoothing (see `scripts/signal_processing.py:ActivityEMA`).
 3. Temporal aggregation (EMA / sliding window) for stability.
 4. Reshape vector → 32×32 grid; optionally apply spatial smoothing or clustering.
 5. Identify directional tuning regions (Vx+/Vx−/Vy+/Vy−) and surface guidance cues.
@@ -85,7 +85,7 @@ Typical progression (see `docs/data.md` + `docs/getting_started.md`):
 ## Code Writing Expectations
 
 - State explicit assumptions before substantive changes.
-- Never assume the happy path; handle file/network errors and reconnect logic (see `middleware.py`).
+- Never assume the happy path; handle file/network errors and reconnect logic (see `scripts/backend.py`).
 - Prefer self-documenting, typed code (Python typing, TypeScript if used). Avoid unnecessary comments.
 - When FastAPI / uvicorn configs change, verify all CLI entrypoints (`brainstorm-stream`, `brainstorm-backend`, `brainstorm-serve`).
 - Do not modify streaming protocols without strong justification; coordinate updates across streamer, middleware, and frontend.
