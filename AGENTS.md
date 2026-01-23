@@ -23,33 +23,17 @@ uv run brainstorm-stream --from-file data/hard/
 # Connects to stream_data.py and serves frontend + WebSocket at :8000
 uv run brainstorm-backend --upstream-url ws://localhost:8765
 
-# Option B: Direct connection (legacy)
-# Static server only; browser connects directly to stream_data.py at :8765
-uv run brainstorm-serve
-
-# Optional middleware (feature WebSocket relay @ ws://localhost:8787)
-uv run python middleware.py
-
 # Validation helpers
 make format       # ruff format
 make lint         # ruff check --fix
-make type-check   # mypy scripts/
+make type-check   # ty check . scripts/
 make test         # pytest
 make check-all    # run format + lint + type + tests
 ```
 
-## Architecture Snapshot (Jan 2026)
-
-### Option A: Unified backend (recommended)
+## Architecture: Unified backend (recommended)
 ```
 [Parquet] --> stream_data.py (WS @8765) --> backend.py (WS client + HTTP @8000) --> Browser
-```
-
-### Option B: Direct connection (legacy)
-```
-[Parquet] --> stream_data.py (WS @8765) --> Browser
-                                              ^
-[Static]  --> serve.py (HTTP @8000) ----------|
 ```
 
 - `scripts/stream_data.py` — FastAPI + uvicorn; streams data at 500 Hz (JSON batches).
@@ -108,7 +92,8 @@ Typical progression (see `docs/data.md` + `docs/getting_started.md`):
 - If anything fails (commands, tests, servers), stop, explain the failure, and request guidance before continuing.
 
 ## Python code style 
-- Focus on a functional-like style that is simple to read
+- Ignore rules when unideomatic! Focus on readability and maintainability.
+- Maintain a functional-like style, similar to a data pipeline.
 - Avoid not obvious side effects, and document when not avoidable (or unideomatic)
 - Use `@dataclass(frozen=True, slots=True)` for necessary data types
 - Type hints everywhere - function signatures, class attributes, returns

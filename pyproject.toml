@@ -20,7 +20,8 @@ dependencies = [
 
 [project.scripts]
 brainstorm-stream = "scripts.stream_data:app"
-brainstorm-serve = "scripts.serve:app"
+brainstorm-serve = "scripts.serve:cli"
+brainstorm-backend = "scripts.backend:cli"
 brainstorm-control = "scripts.control_client:app"
 
 [build-system]
