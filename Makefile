@@ -19,7 +19,7 @@ help:
 	@echo "Development:"
 	@echo "  format         - Format code with ruff"
 	@echo "  lint           - Lint code with ruff"
-	@echo "  type-check     - Run mypy type checking"
+	@echo "  type-check     - Run ty type checking"
 	@echo "  test           - Run tests with pytest"
 	@echo "  test-cov       - Run tests with coverage"
 	@echo "  check-all      - Run all checks (format, lint, type-check, test)"
@@ -102,7 +102,7 @@ lint:
 
 # Type checking
 type-check:
-	uv run mypy scripts/
+	uv run ty check scripts/
 
 # Testing
 test:
