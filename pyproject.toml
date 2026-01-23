@@ -41,13 +41,16 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = [
-    "E",   # pycodestyle errors
-    "W",   # pycodestyle warnings
-    "F",   # pyflakes
-    "I",   # isort
-    "B",   # flake8-bugbear
-    "C4",  # flake8-comprehensions
-    "UP",  # pyupgrade
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "TC",   # flake8-type-checking (move type-only imports behind TYPE_CHECKING)
+    "RUF",  # Ruff-specific rules
+    "SIM",  # flake8-simplify
 ]
 ignore = [
     "E501",  # line too long (handled by formatter)
