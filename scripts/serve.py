@@ -39,6 +39,7 @@ def create_app() -> FastAPI:
 
 app = create_app()
 
+
 @cli.command()
 def main(
     port: int = typer.Option(8000, help="Web server port"),

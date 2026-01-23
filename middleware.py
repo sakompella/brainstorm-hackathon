@@ -33,6 +33,7 @@ from websockets.server import WebSocketServerProtocol
 # Phase 1: activity estimator
 # ---------------------------
 
+
 class ActivityEMA:
     """
     Maintains a fast and slow EMA of signal power (x^2) per channel.
@@ -76,6 +77,7 @@ class ActivityEMA:
 # Shared middleware state
 # ---------------------------
 
+
 @dataclass
 class SharedState:
     fs: float = 500.0
@@ -91,6 +93,7 @@ class SharedState:
 # ---------------------------
 # WebSocket server (output)
 # ---------------------------
+
 
 class FeatureServer:
     def __init__(self, host: str, port: int):
@@ -133,6 +136,7 @@ class FeatureServer:
 # Input stream consumer
 # ---------------------------
 
+
 async def consume_raw_stream(
     input_url: str,
     state: SharedState,
@@ -167,13 +171,25 @@ async def consume_raw_stream(
                             state.fs = fs
                             state.n_ch = n_ch
 
-                        ema = ActivityEMA(n_ch=n_ch, fs=fs, tau_fast_s=tau_fast_s, tau_base_s=tau_base_s)
-                        print(f"[input] init: fs={fs}, n_ch={n_ch}, batch_size={batch_size}")
+                        ema = ActivityEMA(
+                            n_ch=n_ch,
+                            fs=fs,
+                            tau_fast_s=tau_fast_s,
+                            tau_base_s=tau_base_s,
+                        )
+                        print(
+                            f"[input] init: fs={fs}, n_ch={n_ch}, batch_size={batch_size}"
+                        )
 
                     elif msg_type == "sample_batch":
                         if ema is None:
                             # If init didn't arrive yet, assume defaults
-                            ema = ActivityEMA(n_ch=state.n_ch, fs=state.fs, tau_fast_s=tau_fast_s, tau_base_s=tau_base_s)
+                            ema = ActivityEMA(
+                                n_ch=state.n_ch,
+                                fs=state.fs,
+                                tau_fast_s=tau_fast_s,
+                                tau_base_s=tau_base_s,
+                            )
 
                         batch_samples = data["neural_data"]  # list[list[float]]
                         start_time_s = float(data.get("start_time_s", 0.0))
@@ -205,6 +221,7 @@ async def consume_raw_stream(
 # Feature publisher (output loop)
 # ---------------------------
 
+
 async def publish_features(
     server: FeatureServer,
     state: SharedState,
@@ -221,7 +238,9 @@ async def publish_features(
         t0 = time.perf_counter()
 
         async with lock:
-            activity = None if state.last_activity is None else state.last_activity.copy()
+            activity = (
+                None if state.last_activity is None else state.last_activity.copy()
+            )
             t = state.last_t
             connected = state.connected_to_input
             total_samples = state.total_samples
@@ -259,14 +278,15 @@ async def publish_features(
 # Main
 # ---------------------------
 
+
 async def main() -> None:
     input_url = "ws://localhost:8765"
     out_host = "localhost"
     out_port = 8787
 
     # Phase 1 params
-    tau_fast_s = 0.2   # responsive smoothing
-    tau_base_s = 8.0   # slow baseline (not used yet, but computed)
+    tau_fast_s = 0.2  # responsive smoothing
+    tau_base_s = 8.0  # slow baseline (not used yet, but computed)
 
     state = SharedState()
     lock = asyncio.Lock()
@@ -275,7 +295,9 @@ async def main() -> None:
 
     await asyncio.gather(
         server.run(),  # output server
-        consume_raw_stream(input_url, state, lock, tau_fast_s, tau_base_s),  # input consumer
+        consume_raw_stream(
+            input_url, state, lock, tau_fast_s, tau_base_s
+        ),  # input consumer
         publish_features(server, state, lock, out_hz=20.0),  # feature publisher
     )
 
