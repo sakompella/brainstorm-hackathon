@@ -1,0 +1,18 @@
+repos:
+  - repo: local
+    hooks:
+      # Type checking with ty (matches make type-check target)
+      - id: ty-check
+        name: Type check with ty
+        entry: uv run ty check scripts/
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true
+
+# Global configuration
+default_language_version:
+  python: python3.10
+
+# Default behavior
+default_stages: [pre-commit]
