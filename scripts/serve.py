@@ -5,86 +5,41 @@ This server serves the static web files. Web clients connect directly
 to the data stream (stream_data.py) instead of through this server.
 """
 
-import asyncio
 from pathlib import Path
 
 import typer
-from aiohttp import web
+import uvicorn
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
 VIEWER_DIR = Path(__file__).parent.parent / "example_app"
 
-app = typer.Typer(help="Neural Data Viewer Web Server")
+cli = typer.Typer(help="Neural Data Viewer Web Server")
 console = Console()
 
 
-class WebViewerServer:
-    """Web server that serves static files for the neural data viewer."""
+def create_app() -> FastAPI:
+    """Create the FastAPI application."""
+    app = FastAPI(title="Neural Data Viewer")
 
-    def __init__(
-        self,
-        host: str,
-        port: int,
-    ):
-        self.host = host
-        self.port = port
-
-    async def index_handler(self, request: web.Request) -> web.FileResponse:
+    @app.get("/")
+    async def index() -> FileResponse:
         """Serve index.html."""
-        return web.FileResponse(VIEWER_DIR / "index.html")
+        return FileResponse(VIEWER_DIR / "index.html")
 
-    def create_app(self) -> web.Application:
-        """Create the web application."""
-        app = web.Application()
+    # Mount static files (must come after explicit routes)
+    app.mount("/", StaticFiles(directory=VIEWER_DIR), name="static")
 
-        # Serve index.html at root
-        app.router.add_get("/", self.index_handler)
-
-        # Serve static files
-        app.router.add_static("/", VIEWER_DIR, show_index=True)
-
-        return app
-
-    async def start(self) -> None:
-        """Start the server."""
-        # Create web app
-        app = self.create_app()
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, self.host, self.port)
-        await site.start()
-
-        # Display server info
-        table = Table(show_header=False, box=None, padding=(0, 1))
-        table.add_row("[cyan]Web Viewer[/cyan]", f"http://{self.host}:{self.port}")
-
-        console.print(
-            Panel(
-                table,
-                title="[bold green]🚀 Server Running[/bold green]",
-                border_style="green",
-            )
-        )
-        console.print()
-        console.print(
-            "[dim]Note: Web clients connect directly to the data stream at ws://localhost:8765[/dim]"
-        )
-        console.print()
-
-        # Keep server running
-        try:
-            await asyncio.Event().wait()
-        except KeyboardInterrupt:
-            pass
-
-    def stop(self) -> None:
-        """Stop the server."""
-        pass
+    return app
 
 
-@app.command()
+app = create_app()
+
+@cli.command()
 def main(
     port: int = typer.Option(8000, help="Web server port"),
     host: str = typer.Option("localhost", help="Host to bind to"),
@@ -116,18 +71,29 @@ def main(
     console.print(config_table)
     console.print()
 
-    server = WebViewerServer(
+    table = Table(show_header=False, box=None, padding=(0, 1))
+    table.add_row("[cyan]Web Viewer[/cyan]", f"http://{host}:{port}")
+
+    console.print(
+        Panel(
+            table,
+            title="[bold green]🚀 Server Running[/bold green]",
+            border_style="green",
+        )
+    )
+    console.print()
+    console.print(
+        "[dim]Note: Web clients connect directly to the data stream at ws://localhost:8765[/dim]"
+    )
+    console.print()
+
+    uvicorn.run(
+        create_app(),
         host=host,
         port=port,
+        log_level="warning",
     )
-
-    try:
-        asyncio.run(server.start())
-    except KeyboardInterrupt:
-        console.print()
-        console.print("[yellow]⚠[/yellow] Shutting down...")
-        server.stop()
 
 
 if __name__ == "__main__":
-    app()
+    cli()

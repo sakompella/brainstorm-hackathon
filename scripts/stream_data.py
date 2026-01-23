@@ -28,12 +28,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import typer
-import websockets
+import uvicorn
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
-from websockets.server import WebSocketServerProtocol  # type: ignore
 
 app = typer.Typer(help="WebSocket Streaming Server for Track 2 Neural Data")
 console = Console()
@@ -193,7 +193,7 @@ class StreamingServer:
         self.batch_size = batch_size
 
         self.grid_size = int(channels_coords[:, 0].max())
-        self.clients: set[WebSocketServerProtocol] = set()
+        self.clients: set[WebSocket] = set()
         self.running = False
         self.sample_count = 0
         self.start_time = 0.0
@@ -202,6 +202,9 @@ class StreamingServer:
         self.signal_min: float = 0.0
         self.signal_max: float = 0.0
         self.signal_stats_samples: int = 0
+
+        # Live display reference
+        self.live: Live | None = None
 
     def make_status_panel(self) -> Panel:
         """Create a status panel with live information."""
@@ -251,7 +254,7 @@ class StreamingServer:
             border_style="cyan",
         )
 
-    async def register(self, websocket: WebSocketServerProtocol) -> None:
+    async def register(self, websocket: WebSocket) -> None:
         """Register a new client and send initialization data."""
         self.clients.add(websocket)
 
@@ -263,33 +266,26 @@ class StreamingServer:
             "fs": self.fs,
             "batch_size": self.batch_size,
         }
-        await websocket.send(json.dumps(init_message))
+        await websocket.send_text(json.dumps(init_message))
 
-    async def unregister(self, websocket: WebSocketServerProtocol) -> None:
+    async def unregister(self, websocket: WebSocket) -> None:
         """Unregister a client."""
         self.clients.discard(websocket)
-
-    async def handler(self, websocket: WebSocketServerProtocol) -> None:
-        """Handle a WebSocket connection."""
-        await self.register(websocket)
-        try:
-            async for _ in websocket:
-                # Keep connection alive
-                pass
-        except websockets.exceptions.ConnectionClosed:
-            pass
-        finally:
-            await self.unregister(websocket)
 
     async def broadcast(self, message: str) -> None:
         """Broadcast a message to all connected clients."""
         if self.clients:
-            await asyncio.gather(
-                *[client.send(message) for client in self.clients],
-                return_exceptions=True,
-            )
+            disconnected: list[WebSocket] = []
+            for client in self.clients:
+                try:
+                    await client.send_text(message)
+                except Exception:
+                    disconnected.append(client)
+            # Remove disconnected clients
+            for client in disconnected:
+                self.clients.discard(client)
 
-    async def stream_loop(self, live: Live) -> None:
+    async def stream_loop(self) -> None:
         """Main streaming loop that broadcasts neural data at fs."""
         self.start_time = time.perf_counter()
         last_display_update = self.start_time
@@ -335,21 +331,17 @@ class StreamingServer:
                 last_stats_update = current_time
 
             # Update display at 10 Hz
-            if current_time - last_display_update > display_update_interval:
-                live.update(self.make_status_panel())
+            if (
+                self.live
+                and current_time - last_display_update > display_update_interval
+            ):
+                self.live.update(self.make_status_panel())
                 last_display_update = current_time
 
             # Sleep to maintain sampling rate
             sleep_time = expected_time - time.perf_counter() + batch_dt
             if sleep_time > 0:
                 await asyncio.sleep(sleep_time)
-
-    async def start(self, live: Live) -> None:
-        """Start the WebSocket server and streaming loop."""
-        self.running = True
-
-        async with websockets.serve(self.handler, self.host, self.port):
-            await self.stream_loop(live)
 
     def stop(self) -> None:
         """Stop the streaming server."""
@@ -390,6 +382,26 @@ def load_data(data_dir: Path) -> tuple[np.ndarray, float, dict[str, Any]]:
     data = data_df.values.astype(np.float32)
 
     return data, fs, metadata
+
+
+def create_fastapi_app(server: StreamingServer) -> FastAPI:
+    fastapi_app = FastAPI(title="Neural Data Streaming Server")
+
+    @fastapi_app.websocket("/")
+    async def websocket_endpoint(websocket: WebSocket) -> None:
+        """Handle WebSocket connections."""
+        await websocket.accept()
+        await server.register(websocket)
+        try:
+            while True:
+                # Keep connection alive by waiting for messages
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            pass
+        finally:
+            await server.unregister(websocket)
+
+    return fastapi_app
 
 
 @app.command()
@@ -461,6 +473,26 @@ def main(
         batch_size=batch_size,
     )
 
+    fastapi_app = create_fastapi_app(server)
+
+    async def run_server() -> None:
+        """Run the FastAPI server with streaming loop."""
+        server.running = True
+
+        config = uvicorn.Config(
+            fastapi_app,
+            host=host,
+            port=port,
+            log_level="warning",
+        )
+        uvicorn_server = uvicorn.Server(config)
+
+        # Start both the uvicorn server and the streaming loop
+        await asyncio.gather(
+            uvicorn_server.serve(),
+            server.stream_loop(),
+        )
+
     try:
         with Live(
             server.make_status_panel(),
@@ -468,7 +500,8 @@ def main(
             refresh_per_second=10,
             transient=False,
         ) as live:
-            asyncio.run(server.start(live))
+            server.live = live
+            asyncio.run(run_server())
     except KeyboardInterrupt:
         pass
     finally:
@@ -486,4 +519,3 @@ def main(
 
 if __name__ == "__main__":
     app()
-
