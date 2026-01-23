@@ -442,7 +442,7 @@ def main(
 
     # Load data
     try:
-        data, fs, metadata = load_data(data_dir)
+        data, fs, _ = load_data(data_dir)
     except FileNotFoundError as e:
         console.print(f"[red]✗ Error:[/red] {e}")
         raise typer.Exit(code=1) from e

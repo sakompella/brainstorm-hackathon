@@ -8,7 +8,7 @@ The datasets contain pre-generated neural data at four difficulty levels:
 - hard: Challenging conditions similar to real-time evaluation
 
 Each dataset contains:
-- track2_data.parquet: Neural signals (n_samples × 1024 channels)
+- track2_data.parquet: Neural signals (n_samples x 1024 channels)
 - ground_truth.parquet: Cursor kinematics and tuned region positions
 - README.md: Detailed description of dataset parameters
 """

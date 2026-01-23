@@ -7,6 +7,7 @@ and sends arrow key presses as control messages to move the array position.
 """
 
 import asyncio
+import contextlib
 import json
 import sys
 
@@ -188,14 +189,8 @@ class ControlClient:
                 try:
                     if self.websocket:
                         # Wait for messages (with timeout to allow checking running state)
-                        try:
-                            message = await asyncio.wait_for(
-                                self.websocket.recv(), timeout=0.1
-                            )
-                            # Silently handle any messages from server
-                        except asyncio.TimeoutError:
-                            # Timeout is fine, just check if we should continue
-                            pass
+                        with contextlib.suppress(asyncio.TimeoutError):
+                            await asyncio.wait_for(self.websocket.recv(), timeout=0.1)
                 except websockets.exceptions.ConnectionClosed:
                     console.print("\n[yellow]Connection closed by server[/yellow]")
                     break

@@ -22,12 +22,9 @@ import asyncio
 import json
 import time
 from dataclasses import dataclass
-from typing import Optional, Set
 
 import numpy as np
 import websockets
-from websockets.server import WebSocketServerProtocol
-
 
 # ---------------------------
 # Phase 1: activity estimator
@@ -87,7 +84,7 @@ class SharedState:
     connected_to_input: bool = False
 
     # Latest computed features
-    last_activity: Optional[np.ndarray] = None
+    last_activity: np.ndarray | None = None
 
 
 # ---------------------------
@@ -99,15 +96,15 @@ class FeatureServer:
     def __init__(self, host: str, port: int):
         self.host = host
         self.port = port
-        self.clients: Set[WebSocketServerProtocol] = set()
+        self.clients: set = set()
 
-    async def register(self, ws: WebSocketServerProtocol) -> None:
+    async def register(self, ws) -> None:
         self.clients.add(ws)
 
-    async def unregister(self, ws: WebSocketServerProtocol) -> None:
+    async def unregister(self, ws) -> None:
         self.clients.discard(ws)
 
-    async def handler(self, ws: WebSocketServerProtocol) -> None:
+    async def handler(self, ws) -> None:
         await self.register(ws)
         try:
             async for _ in ws:
@@ -148,7 +145,7 @@ async def consume_raw_stream(
     Connect to the raw brainstorm-stream and keep updating the EMA activity.
     Automatically reconnects on drop.
     """
-    ema: Optional[ActivityEMA] = None
+    ema: ActivityEMA | None = None
 
     while True:
         try:
