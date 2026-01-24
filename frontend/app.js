@@ -415,12 +415,9 @@ function updateInfoCards(data) {
     // Update center indicator (1 = centered, 0 = corner)
     const center = data.center_distance || 0;
     const centerCard = document.querySelector('.card-coverage .card-body');
-    centerCard.textContent = `Coverage: ${(center * 100).toFixed(1)}%`;
-
-    // Update confidence
-    const confidence = data.confidence || 0;
-    const statusCard = document.querySelector('.card-status .card-body');
-    statusCard.textContent = confidence > 0.5 ? 'Online' : 'Offline';
+    if (centerCard) {
+        centerCard.textContent = `Coverage: ${(center * 100).toFixed(1)}%`;
+    }
 }
 
 /**
