@@ -50,6 +50,45 @@ class BandpowerEMA:
             self.p_base = (1.0 - self.a_base) * self.p_base + self.a_base * x2
 
     def normalized_vec(self) -> np.ndarray:
-        return (np.log(self.p_fast + 1e-12) - np.log(self.p_base + 1e-12)).astype(
-            np.float32
-        )
+        return (np.log(self.p_fast + 1e-12) - np.log(self.p_base + 1e-12)).astype(np.float32)
+    
+    def normalized_vec(self, use_percentile=True):
+        vec = (np.log(self.p_fast + 1e-12) - np.log(self.p_base + 1e-12))
+        
+        if use_percentile:
+            # <1ms - negligible latency
+            p5 = np.percentile(vec, 5)
+            p95 = np.percentile(vec, 95)
+            vec = (vec - p5) / (p95 - p5 + 1e-9)
+        
+        return vec.astype(np.float32)
+
+
+
+
+#create a multi-band version
+class MultiBandPowerEMA:
+    """Track power across multiple frequency bands"""
+    def __init__(self, n_ch, fs, bands, tau_fast_s=0.25, tau_base_s=8.0):
+        self.bands = bands  # e.g., {'highgamma': (70,150), 'beta': (12,30)}
+        self.estimators = {
+            name: BandpowerEMA(n_ch, fs, band_hz=band, tau_fast_s=tau_fast_s, tau_base_s=tau_base_s)
+            for name, band in bands.items()
+        }
+    
+    def update_batch(self, batch_raw):
+        for estimator in self.estimators.values():
+            estimator.update_batch(batch_raw)
+    
+    def get_combined_heatmap(self, weights=None):
+        """Combine multiple bands with optional weights"""
+        if weights is None:
+            weights = {name: 1.0 for name in self.bands.keys()}
+        
+        combined = np.zeros_like(next(iter(self.estimators.values())).normalized_vec())
+        total_weight = sum(weights.values())
+        
+        for name, estimator in self.estimators.items():
+            combined += weights.get(name, 1.0) * estimator.normalized_vec()
+        
+        return combined / total_weight

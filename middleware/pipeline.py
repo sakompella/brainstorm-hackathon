@@ -148,3 +148,28 @@ async def run_pipeline(cfg: Config) -> None:
         consume_raw_stream(cfg, state, lock),
         publish_features(server, cfg, state, lock),
     )
+
+
+def compute_activity_metrics(heatmap):
+    """<1ms total - negligible latency"""
+    return {
+        "p50": float(np.percentile(heatmap, 50)),
+        "p90": float(np.percentile(heatmap, 90)),
+        "p96": float(np.percentile(heatmap, 96)),
+        "p99": float(np.percentile(heatmap, 99)),
+        "presence": float(np.percentile(heatmap, 99) - np.percentile(heatmap, 50)),
+        "spread": float(np.std(heatmap))
+    }
+
+# OPTIONAL: Only compute centroid if needed for UI
+def detect_hotspot_centroid(heatmap, threshold_percentile=96):
+    """~1-3ms - acceptable if you need it"""
+    threshold = np.percentile(heatmap, threshold_percentile)
+    active_points = np.argwhere(heatmap > threshold)
+    
+    if len(active_points) < 3:
+        return None
+    
+    # Simple centroid (faster than k-means)
+    centroid = np.mean(active_points, axis=0)
+    return centroid
