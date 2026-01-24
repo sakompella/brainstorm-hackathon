@@ -20,22 +20,22 @@ uv run python run_middleware.py > /tmp/middleware.log 2>&1 &
 MIDDLEWARE_PID=$!
 sleep 2
 
-# Start frontend server
-echo "Starting frontend server on :8000..."
-uv run python scripts/serve.py --port 8000 > /tmp/serve.log 2>&1 &
-SERVE_PID=$!
+# Start unified backend (connects to stream + serves frontend)
+echo "Starting unified backend on :8000..."
+uv run brainstorm-backend --upstream-url ws://localhost:8765 > /tmp/backend.log 2>&1 &
+BACKEND_PID=$!
 sleep 2
 
 echo ""
 echo "✅ All services started!"
 echo ""
-echo "📊 Data Stream:   http://localhost:8765 (PID: $STREAM_PID)"
-echo "⚙️  Middleware:    http://localhost:8787 (PID: $MIDDLEWARE_PID)"
-echo "🌐 Frontend:      http://localhost:8000 (PID: $SERVE_PID)"
+echo "📊 Data Stream:   ws://localhost:8765 (PID: $STREAM_PID)"
+echo "⚙️  Middleware:    ws://localhost:8787 (PID: $MIDDLEWARE_PID)"
+echo "🌐 Backend+UI:    http://localhost:8000 (PID: $BACKEND_PID)"
 echo ""
 echo "Logs:"
 echo "  tail -f /tmp/stream.log"
 echo "  tail -f /tmp/middleware.log"
-echo "  tail -f /tmp/serve.log"
+echo "  tail -f /tmp/backend.log"
 echo ""
 echo "To stop all: lsof -ti:8765,8787,8000 | xargs kill"
