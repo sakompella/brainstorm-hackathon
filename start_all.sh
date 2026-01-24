@@ -19,7 +19,7 @@ sleep 2
 
 # Start backend (signal processing + static server)
 echo "Starting backend on :8000..."
-uv run brainstorm-backend --upstream-url ws://localhost:8765 > /tmp/backend.log 2>&1 &
+uv run brainstorm-backend --upstream-url ws://192.168.1.152:8765/stream > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
 sleep 2
 
