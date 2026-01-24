@@ -5,7 +5,7 @@
  * the activity as a scatter plot with magma colormap.
  */
 
-// Magma colormap (256 values, RGB)
+// Theme colormap (256 values, RGB)
 const MAGMA_COLORMAP = generateMagmaColormap();
 
 // State
@@ -40,6 +40,34 @@ let channelSize = 14;
 // Raw neural signals have small amplitude - use a tighter range to show variations
 let vMin = -0.02;
 let vMax = 0.02;
+
+/**
+ * Resize canvas to 1/3 of its container.
+ */
+function resizeCanvasToContainer() {
+    if (!canvas) return;
+    const container = canvas.parentElement;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const minSide = Math.min(rect.width, rect.height);
+    const size = Math.max(120, Math.floor((minSide > 0 ? minSide : 360) * 0.85));
+    const dpr = window.devicePixelRatio || 1;
+
+    canvas.width = Math.floor(size * dpr);
+    canvas.height = Math.floor(size * dpr);
+    canvas.style.width = `${size}px`;
+    canvas.style.height = `${size}px`;
+
+    canvasWidth = size;
+    canvasHeight = size;
+
+    if (ctx) {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.fillStyle = '#0a0a0f';
+        ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    }
+}
 
 /**
  * Generate the magma colormap as an array of [r, g, b] values.
@@ -147,13 +175,38 @@ function initCanvas() {
     canvas = document.getElementById('neural-canvas');
     ctx = canvas.getContext('2d');
 
-    // Set canvas size
-    canvas.width = canvasWidth;
-    canvas.height = canvasHeight;
+    resizeCanvasToContainer();
 
-    // Clear canvas
-    ctx.fillStyle = '#0a0a0f';
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    // Draw grid even before data arrives
+    drawGridOverlay();
+}
+
+/**
+ * Draw 32x32 grid overlay.
+ */
+function drawGridOverlay() {
+    if (!ctx) return;
+
+    const size = Math.min(canvasWidth, canvasHeight);
+    const padding = Math.max(4, Math.floor(size * 0.04));
+    const plotSize = Math.max(1, size - 2 * padding);
+    const cellSize = plotSize / (gridSize - 1);
+    const gridStart = padding;
+    const gridEnd = padding + plotSize;
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i < gridSize; i++) {
+        const offset = gridStart + i * cellSize;
+        ctx.moveTo(offset, gridStart);
+        ctx.lineTo(offset, gridEnd);
+        ctx.moveTo(gridStart, offset);
+        ctx.lineTo(gridEnd, offset);
+    }
+    ctx.stroke();
+    ctx.restore();
 }
 
 /**
@@ -216,6 +269,8 @@ function renderNeuralData(neuralData, timeS) {
     // Clear canvas
     ctx.fillStyle = '#0a0a0f';
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+    drawGridOverlay();
 
     // Draw each channel
     for (let i = 0; i < channelsCoords.length; i++) {
@@ -367,6 +422,12 @@ function connect() {
  */
 function init() {
     initCanvas();
+    window.addEventListener('resize', resizeCanvasToContainer);
+    window.addEventListener('resize', drawGridOverlay);
+    requestAnimationFrame(() => {
+        resizeCanvasToContainer();
+        drawGridOverlay();
+    });
 
     // Connect button handler
     document.getElementById('connect-btn').addEventListener('click', connect);
