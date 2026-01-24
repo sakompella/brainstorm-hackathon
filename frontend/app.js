@@ -20,6 +20,10 @@ let currentFps = 0;
 // Time tracking
 let currentTime = 0.0;
 
+// Baseline for dB conversion
+let baselineMeanPower = null;
+const DB_EPS = 1e-12;
+
 // Time series data
 let timeSeriesData = [];
 let maxTimeSeriesPoints = 500;
@@ -367,11 +371,11 @@ function updateInfoCards(data) {
 /**
  * Plot time series data.
  */
-function plotTimeSeries(meanPower, timestamp) {
+function plotTimeSeries(meanPowerDb, timestamp) {
     if (!timeSeriesCtx || !timeSeriesCanvas) return;
     
     // Add new data point
-    timeSeriesData.push({ t: timestamp, value: meanPower });
+    timeSeriesData.push({ t: timestamp, value: meanPowerDb });
     
     // Keep only recent data
     if (timeSeriesData.length > maxTimeSeriesPoints) {
@@ -467,7 +471,7 @@ function plotTimeSeries(meanPower, timestamp) {
     timeSeriesCtx.save();
     timeSeriesCtx.translate(10, height / 2);
     timeSeriesCtx.rotate(-Math.PI / 2);
-    timeSeriesCtx.fillText('Mean Power (log)', 0, 0);
+    timeSeriesCtx.fillText('Mean Power (dB)', 0, 0);
     timeSeriesCtx.restore();
 }
 
@@ -525,9 +529,13 @@ function connect() {
                             }
                         }
                         const meanPower = count > 0 ? sum / count : 0;
+                        if (baselineMeanPower === null) {
+                            baselineMeanPower = Math.max(meanPower, DB_EPS);
+                        }
+                        const dbPower = 10 * Math.log10(Math.max(meanPower, DB_EPS) / baselineMeanPower);
                         
                         // Plot time series
-                        plotTimeSeries(meanPower, currentTime);
+                        plotTimeSeries(dbPower, currentTime);
                     }
                 }
             } catch (err) {
