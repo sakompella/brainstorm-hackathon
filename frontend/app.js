@@ -49,17 +49,17 @@ function resizeCanvasToContainer() {
     if (!container) return;
 
     const rect = container.getBoundingClientRect();
-    const minSide = Math.min(rect.width, rect.height);
-    const size = Math.max(120, Math.floor((minSide > 0 ? minSide : 360) * 0.85));
+    const width = Math.floor(rect.width);
+    const height = Math.floor(rect.height);
     const dpr = window.devicePixelRatio || 1;
 
-    canvas.width = Math.floor(size * dpr);
-    canvas.height = Math.floor(size * dpr);
-    canvas.style.width = `${size}px`;
-    canvas.style.height = `${size}px`;
+    canvas.width = Math.floor(width * dpr);
+    canvas.height = Math.floor(height * dpr);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
 
-    canvasWidth = size;
-    canvasHeight = size;
+    canvasWidth = width;
+    canvasHeight = height;
 
     if (ctx) {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -205,7 +205,7 @@ function resizeTimeSeriesCanvas() {
 /**
  * Render heatmap.
  */
-function renderHeatmap(heatmap, centroid) {
+function renderHeatmap(heatmap, centroid, coverage) {
     if (!heatmap || !ctx) return;
 
     const rows = heatmap.length;
@@ -222,19 +222,31 @@ function renderHeatmap(heatmap, centroid) {
 
     const size = Math.min(canvasWidth, canvasHeight);
     const padding = Math.max(4, Math.floor(size * 0.04));
-    const plotSize = Math.max(1, size - 2 * padding);
+    const plotSize = Math.max(1, (size - 2 * padding) * 0.6); // Make heatmap 60% of available space
     const cellSize = plotSize / cols;
 
     // Clear canvas
     ctx.fillStyle = '#0a0a0f';
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-    // Draw heatmap
+    // Calculate offset to center the centroid (hotspot) at canvas center
+    let offsetX = 0;
+    let offsetY = 0;
+    if (centroid) {
+        const [cy, cx] = centroid;
+        // Offset needed to place centroid at the absolute center of the canvas
+        const centerX = canvasWidth / 2;
+        const centerY = canvasHeight / 2;
+        offsetX = centerX - (padding + (cx + 0.5) * cellSize);
+        offsetY = centerY - (padding + (cy + 0.5) * cellSize);
+    }
+
+    // Draw heatmap with offset
     for (let row = 0; row < rows; row++) {
         for (let col = 0; col < cols; col++) {
             const value = heatmap[row][col];
-            const x = padding + col * cellSize;
-            const y = padding + row * cellSize;
+            const x = padding + col * cellSize + offsetX;
+            const y = padding + row * cellSize + offsetY;
 
             const colorIdx = valueToColorIndex(value);
             const [r, g, b] = MAGMA_COLORMAP[colorIdx];
@@ -243,50 +255,105 @@ function renderHeatmap(heatmap, centroid) {
         }
     }
 
-    // Draw grid overlay
+    // Draw grid overlay with offset
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
     ctx.lineWidth = 0.5;
     ctx.beginPath();
     for (let i = 0; i <= cols; i++) {
-        const offset = padding + i * cellSize;
-        ctx.moveTo(offset, padding);
-        ctx.lineTo(offset, padding + plotSize);
-        ctx.moveTo(padding, offset);
-        ctx.lineTo(padding + plotSize, offset);
+        const x = padding + i * cellSize + offsetX;
+        ctx.moveTo(x, padding + offsetY);
+        ctx.lineTo(x, padding + plotSize + offsetY);
+    }
+    for (let i = 0; i <= rows; i++) {
+        const y = padding + i * cellSize + offsetY;
+        ctx.moveTo(padding + offsetX, y);
+        ctx.lineTo(padding + plotSize + offsetX, y);
     }
     ctx.stroke();
 
-    // Draw centroid if provided
+    // Check if we should use green (good alignment)
+    let isAligned = false;
+    if (centroid) {
+        const [cy, cx] = centroid;
+        const arrayCenter = [rows / 2, cols / 2];
+        const vecX = cx - arrayCenter[1];
+        const vecY = cy - arrayCenter[0];
+        const mag = Math.sqrt(vecX ** 2 + vecY ** 2);
+        const coverageValue = (coverage || 0) * 100;
+        // Arrow is "small" if magnitude is less than 3 grid units AND coverage > 70%
+        isAligned = mag < 3 && coverageValue > 70;
+    }
+
+    // Draw border around heatmap
+    ctx.strokeStyle = isAligned ? 'rgba(76, 222, 128, 0.8)' : 'rgba(89, 224, 255, 0.5)';
+    ctx.lineWidth = isAligned ? 12 : 4;
+    ctx.strokeRect(
+        padding + offsetX,
+        padding + offsetY,
+        plotSize,
+        plotSize
+    );
+
+    // Draw centroid if provided (now always at center)
     if (centroid) {
         const [cy, cx] = centroid; // backend sends [y,x]
-        ctx.fillStyle = 'cyan';
+        
+        // Centroid is now fixed at absolute canvas center
+        const centerX = canvasWidth / 2;
+        const centerY = canvasHeight / 2;
+        
+        ctx.strokeStyle = isAligned ? 'rgba(76, 222, 128, 0.9)' : 'cyan';
+        ctx.lineWidth = isAligned ? 12 : 4;
         ctx.beginPath();
         ctx.arc(
-            padding + (cx + 0.5) * cellSize,
-            padding + (cy + 0.5) * cellSize,
-            Math.max(3, cellSize / 2),
+            centerX,
+            centerY,
+            Math.max(15, cellSize * 1.5),
             0,
             2 * Math.PI
         );
-        ctx.fill();
+        ctx.stroke();
 
-        // --- Compute vector from center (16,16) to centroid ---
-        const center = [16, 16];
-        let vecX = cx - center[1];
-        let vecY = cy - center[0];
+        // --- Compute vector from array center (16,16) to centroid ---
+        const arrayCenter = [rows / 2, cols / 2]; // [16, 16]
+        let vecX = cx - arrayCenter[1];
+        let vecY = cy - arrayCenter[0];
 
         // Compute magnitude
         const mag = Math.sqrt(vecX ** 2 + vecY ** 2) || 1; // avoid div0
         const unitX = vecX / mag;
         const unitY = vecY / mag;
 
-        // Draw arrow from center to centroid
+        // Draw arrow from array center (with offset, so it moves) to centroid (fixed at center)
+        const arrayCenterX = padding + (arrayCenter[1] + 0.5) * cellSize + offsetX;
+        const arrayCenterY = padding + (arrayCenter[0] + 0.5) * cellSize + offsetY;
+        
         ctx.strokeStyle = 'lime';
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 6;
         ctx.beginPath();
-        ctx.moveTo(padding + (center[1] + 0.5) * cellSize, padding + (center[0] + 0.5) * cellSize);
-        ctx.lineTo(padding + (cx + 0.5) * cellSize, padding + (cy + 0.5) * cellSize);
+        ctx.moveTo(arrayCenterX, arrayCenterY);
+        ctx.lineTo(centerX, centerY);
         ctx.stroke();
+
+        // Draw arrowhead in the middle of the line
+        const midX = (arrayCenterX + centerX) / 2;
+        const midY = (arrayCenterY + centerY) / 2;
+        const arrowSize = 20;
+        const angle = Math.atan2(centerY - arrayCenterY, centerX - arrayCenterX);
+        
+        ctx.fillStyle = 'lime';
+        ctx.beginPath();
+        ctx.moveTo(midX, midY);
+        ctx.lineTo(
+            midX - arrowSize * Math.cos(angle - Math.PI / 6),
+            midY - arrowSize * Math.sin(angle - Math.PI / 6)
+        );
+        ctx.lineTo(
+            midX - arrowSize * Math.cos(angle + Math.PI / 6),
+            midY - arrowSize * Math.sin(angle + Math.PI / 6)
+        );
+        ctx.closePath();
+        ctx.fill();
 
         // --- Translate unit vector into neuro/medical directions ---
         let direction = '';
@@ -300,10 +367,11 @@ function renderHeatmap(heatmap, centroid) {
         else if (unitX < 0 && unitY > 0) direction = 'Posterior-Left';
         else direction = 'Center';
 
-        // Display direction text
-        ctx.fillStyle = 'white';
-        ctx.font = '16px monospace';
-        ctx.fillText(`Direction: ${direction}`, 10, 20);
+        // Update move instruction card
+        const directionDisplay = document.getElementById('direction-display');
+        if (directionDisplay) {
+            directionDisplay.textContent = direction;
+        }
     }
 
     // Update FPS counter
@@ -359,13 +427,28 @@ function updateStatus(status, text) {
 function updateInfoCards(data) {
     // Update center indicator (1 = centered, 0 = corner)
     const center = data.center_distance || 0;
+    const coveragePercent = center * 100;
     const centerCard = document.querySelector('.card-coverage .card-body');
-    centerCard.textContent = `Coverage: ${(center * 100).toFixed(1)}%`;
-
-    // Update confidence
-    const confidence = data.confidence || 0;
-    const statusCard = document.querySelector('.card-status .card-body');
-    statusCard.textContent = confidence > 0.5 ? 'Online' : 'Offline';
+    const coverageCard = document.querySelector('.card-coverage');
+    
+    if (centerCard) {
+        centerCard.textContent = `Coverage: ${coveragePercent.toFixed(1)}%`;
+        
+        // Check if we should show green (good alignment)
+        if (coveragePercent > 70) {
+            centerCard.style.color = '#4ade80';
+            if (coverageCard) {
+                coverageCard.style.borderColor = 'rgba(76, 222, 128, 0.6)';
+            }
+        } else {
+            centerCard.style.color = '';
+            if (coverageCard) {
+                coverageCard.style.borderColor = '';
+            }
+        }
+    }
+    
+    return center;
 }
 
 /**
@@ -400,13 +483,13 @@ function plotTimeSeries(meanPowerDb, timestamp) {
     const maxValue = Math.max(...values);
     const valueRange = maxValue - minValue || 1;
     
-    // EKG-style: newest data at 80% of the plot width
+    // EKG-style: newest data at 70% of the plot width
     const latestTime = timeSeriesData[timeSeriesData.length - 1].t;
     const oldestTime = timeSeriesData[0].t;
     const actualTimeRange = latestTime - oldestTime || 1;
     
-    // Scale time range so that the actual data spans 80% of the width
-    const displayTimeRange = actualTimeRange / 0.85;
+    // Scale time range so that the actual data spans 70% of the width
+    const displayTimeRange = actualTimeRange / 0.70;
     
     // Draw axes
     timeSeriesCtx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
@@ -440,16 +523,16 @@ function plotTimeSeries(meanPowerDb, timestamp) {
         timeSeriesCtx.fillText(value.toFixed(2), padding.left - 5, y);
     }
     
-    // Draw time series line (EKG-style, newest at 80% position)
+    // Draw time series line (EKG-style, newest at 70% position)
     timeSeriesCtx.strokeStyle = '#ff6b6b';
     timeSeriesCtx.lineWidth = 2;
     timeSeriesCtx.beginPath();
     
     for (let i = 0; i < timeSeriesData.length; i++) {
         const d = timeSeriesData[i];
-        // Position relative to latest time, with latest at 80% of plot width
+        // Position relative to latest time, with latest at 70% of plot width
         const timeFromLatest = latestTime - d.t;
-        const normalizedPosition = 0.8 - (timeFromLatest / displayTimeRange);
+        const normalizedPosition = 0.7 - (timeFromLatest / displayTimeRange);
         const x = padding.left + 60 + normalizedPosition * plotWidth;
         const y = height - padding.bottom - ((d.value - minValue) / valueRange) * plotHeight;
         
@@ -513,11 +596,11 @@ function connect() {
                         const nChannels = 96 * 96;
                         document.getElementById('channel-count').textContent = `${nChannels} channels (${dataSize}x${dataSize} data)`;
 
-                        // Render heatmap
-                        renderHeatmap(heatmap, centroid);
+                        // Update info cards first to get coverage
+                        const coverage = updateInfoCards(data);
 
-                        // Update info cards
-                        updateInfoCards(data);
+                        // Render heatmap with coverage data
+                        renderHeatmap(heatmap, centroid, coverage);
                         
                         // Calculate mean bandpower for time series
                         let sum = 0;

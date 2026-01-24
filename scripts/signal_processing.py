@@ -7,15 +7,17 @@ Ported from signal_processing.ipynb - full pipeline with:
 - 70-150 Hz bandpass (high gamma)
 - Power extraction with EMA smoothing
 - Spatial smoothing (gaussian)
-- Weighted centroid tracking
+- Drift tracking algorithms (elastic lasso, convex hull, bounding box, sliding template)
 """
 
+from collections import deque
 from dataclasses import dataclass
 from typing import TypedDict
 
 import numpy as np
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, maximum_filter
 from scipy.signal import butter, iirnotch, sosfilt, sosfilt_zi, tf2sos
+from scipy.spatial import ConvexHull
 
 
 class ProcessingSettings(TypedDict):
@@ -274,25 +276,443 @@ def weighted_centroid(grid: np.ndarray, threshold_percentile: float = 50) -> np.
     return np.array([center_row, center_col], dtype=np.float32)
 
 
-def compute_center_distance(centroid: np.ndarray, grid_size: int = 32) -> float:
-    """
-    Distance from centroid to grid center.
-
-    Measures how well the hotspot centroid is centered on the grid, useful for
-    guidance during array positioning. Range [0, 1] where 1 = perfectly centered,
-    0 = at corner of grid.
+def compute_presence(power: np.ndarray, k: int = 50) -> float:
+    """Compute global presence indicator from power.
 
     Args:
-        centroid: [row, col] array with centroid position
-        grid_size: grid dimension (default 32 for 32x32 array)
+        power: per-channel power array
+        k: number of top channels to average
 
     Returns:
-        centering: normalized metric 1.0 (perfectly centered) to 0.0 (corner)
+        mean power of top-k channels
     """
-    center = grid_size / 2
-    raw = np.sqrt((centroid[0] - center) ** 2 + (centroid[1] - center) ** 2)
-    max_dist = np.sqrt(2) * center
-    return float(1 - (raw / max_dist))
+    topk = np.partition(power.ravel(), -k)[-k:]
+    return float(np.mean(topk))
+
+
+# =============================================================================
+# DRIFT TRACKING ALGORITHMS
+# Ported from signal_processing.ipynb with exact settings
+# =============================================================================
+
+
+class ElasticLassoTracker:
+    """Adaptive lasso that wraps hotspots - slow to expand, fast to shrink.
+
+    Settings from notebook: expand=0.15, contract=0.5, decay_frames=5
+    """
+
+    def __init__(
+        self,
+        grid_size: int = 32,
+        activity_threshold_pct: float = 75,
+        decay_frames: int = 5,
+        contract_rate: float = 0.5,
+        expand_rate: float = 0.15,
+        display_thresh: float = 0.5,
+    ):
+        self.grid_size = grid_size
+        self.activity_threshold_pct = activity_threshold_pct
+        self.decay_frames = decay_frames
+        self.contract_rate = contract_rate
+        self.expand_rate = expand_rate
+        self.display_thresh = display_thresh
+
+        self.membership = np.zeros((grid_size, grid_size), dtype=np.float32)
+        self.inactive_frames = np.zeros((grid_size, grid_size), dtype=np.float32)
+
+    def update(self, grid: np.ndarray) -> dict:
+        """Update lasso with new grid and return centroid + boundary."""
+        threshold = np.percentile(grid, self.activity_threshold_pct)
+        active = (grid > threshold).astype(np.float32)
+
+        # Update inactive counter
+        self.inactive_frames = np.where(active > 0.5, 0, self.inactive_frames + 1)
+
+        # EXPAND slowly where active
+        self.membership = np.where(
+            active > 0.5,
+            self.membership + self.expand_rate * (1 - self.membership),
+            self.membership,
+        )
+
+        # CONTRACT fast where inactive too long
+        decay_mask = self.inactive_frames > self.decay_frames
+        self.membership = np.where(
+            decay_mask,
+            self.membership * (1 - self.contract_rate),
+            self.membership,
+        )
+
+        self.membership = np.clip(self.membership, 0, 1)
+
+        # Compute centroid
+        total = self.membership.sum()
+        if total > 1e-10:
+            rows, cols = _get_coord_grids(self.grid_size, self.grid_size)
+            cr = float((rows * self.membership).sum() / total)
+            cc = float((cols * self.membership).sum() / total)
+        else:
+            cr, cc = self.grid_size / 2, self.grid_size / 2
+
+        # Boundary mask for visualization
+        boundary_mask = (self.membership > self.display_thresh).astype(np.float32)
+
+        return {
+            "centroid": [cr, cc],
+            "membership": self.membership.copy(),
+            "boundary_mask": boundary_mask,
+            "area": float(boundary_mask.sum()),
+        }
+
+
+class ConvexHullTracker:
+    """Track convex hull of persistent hotspots.
+
+    Settings: persistence_frames=2, activity_threshold_pct=50
+    """
+
+    def __init__(
+        self,
+        grid_size: int = 32,
+        activity_threshold_pct: float = 50,
+        persistence_frames: int = 2,
+    ):
+        self.grid_size = grid_size
+        self.activity_threshold_pct = activity_threshold_pct
+        self.persistence_frames = persistence_frames
+
+        self.peak_persistence = np.zeros((grid_size, grid_size), dtype=np.float32)
+        self.last_centroid = np.array([grid_size / 2, grid_size / 2], dtype=np.float32)
+
+    def update(self, grid: np.ndarray) -> dict:
+        """Update hull tracker with new grid."""
+        local_max = maximum_filter(grid, size=3) == grid
+        threshold = np.percentile(grid, self.activity_threshold_pct)
+        peaks = local_max & (grid > threshold)
+
+        # Fast persistence buildup (+3), slower decay (-0.3)
+        self.peak_persistence = np.where(
+            peaks,
+            np.minimum(self.peak_persistence + 3, self.persistence_frames * 3),
+            np.maximum(self.peak_persistence - 0.3, 0),
+        )
+
+        persistent_mask = self.peak_persistence >= self.persistence_frames
+        persistent_coords = np.argwhere(persistent_mask)
+
+        hull_vertices: list[list[float]] = []
+
+        if len(persistent_coords) >= 3:
+            try:
+                hull = ConvexHull(persistent_coords)
+                hull_pts = persistent_coords[hull.vertices]
+                cr = float(hull_pts[:, 0].mean())
+                cc = float(hull_pts[:, 1].mean())
+                self.last_centroid = np.array([cr, cc], dtype=np.float32)
+                hull_vertices = hull_pts.tolist()
+            except Exception:
+                if len(persistent_coords) > 0:
+                    cr = float(persistent_coords[:, 0].mean())
+                    cc = float(persistent_coords[:, 1].mean())
+                    self.last_centroid = np.array([cr, cc], dtype=np.float32)
+        elif len(persistent_coords) >= 1:
+            cr = float(persistent_coords[:, 0].mean())
+            cc = float(persistent_coords[:, 1].mean())
+            self.last_centroid = np.array([cr, cc], dtype=np.float32)
+
+        return {
+            "centroid": self.last_centroid.tolist(),
+            "hull_vertices": hull_vertices,
+            "n_persistent_peaks": int(persistent_mask.sum()),
+        }
+
+
+class BoundingBoxTracker:
+    """Adaptive bounding box that shrinks toward activity, expands to include new.
+
+    Settings from notebook: shrink_rate=0.15, expand_rate=0.2
+    """
+
+    def __init__(
+        self,
+        grid_size: int = 32,
+        activity_threshold_pct: float = 80,
+        shrink_rate: float = 0.15,
+        expand_rate: float = 0.2,
+    ):
+        self.grid_size = grid_size
+        self.activity_threshold_pct = activity_threshold_pct
+        self.shrink_rate = shrink_rate
+        self.expand_rate = expand_rate
+
+        # Box bounds: [row_min, row_max, col_min, col_max]
+        quarter = grid_size / 4
+        self.box = [quarter, grid_size - quarter, quarter, grid_size - quarter]
+
+    def update(self, grid: np.ndarray) -> dict:
+        """Update bounding box with new grid."""
+        threshold = np.percentile(grid, self.activity_threshold_pct)
+        active = grid > threshold
+        active_coords = np.argwhere(active)
+
+        if len(active_coords) > 0:
+            act_rmin = float(active_coords[:, 0].min())
+            act_rmax = float(active_coords[:, 0].max())
+            act_cmin = float(active_coords[:, 1].min())
+            act_cmax = float(active_coords[:, 1].max())
+
+            # EXPAND to include activity outside box
+            if act_rmin < self.box[0]:
+                self.box[0] -= self.expand_rate * (self.box[0] - act_rmin)
+            if act_rmax > self.box[1]:
+                self.box[1] += self.expand_rate * (act_rmax - self.box[1])
+            if act_cmin < self.box[2]:
+                self.box[2] -= self.expand_rate * (self.box[2] - act_cmin)
+            if act_cmax > self.box[3]:
+                self.box[3] += self.expand_rate * (act_cmax - self.box[3])
+
+            # SHRINK toward activity extent
+            self.box[0] += self.shrink_rate * (act_rmin - self.box[0])
+            self.box[1] += self.shrink_rate * (act_rmax - self.box[1])
+            self.box[2] += self.shrink_rate * (act_cmin - self.box[2])
+            self.box[3] += self.shrink_rate * (act_cmax - self.box[3])
+
+        # Clamp to valid range
+        self.box = [
+            max(0, self.box[0]),
+            min(self.grid_size - 1, self.box[1]),
+            max(0, self.box[2]),
+            min(self.grid_size - 1, self.box[3]),
+        ]
+
+        cr = (self.box[0] + self.box[1]) / 2
+        cc = (self.box[2] + self.box[3]) / 2
+
+        return {
+            "centroid": [cr, cc],
+            "box": self.box.copy(),  # [row_min, row_max, col_min, col_max]
+        }
+
+
+class SlidingTemplateTracker:
+    """Sliding window template - rolling average of last N frames.
+
+    Settings from notebook: window_frames=20
+    """
+
+    def __init__(
+        self,
+        grid_size: int = 32,
+        window_frames: int = 20,
+    ):
+        self.grid_size = grid_size
+        self.window_frames = window_frames
+        self.window: deque[np.ndarray] = deque(maxlen=window_frames)
+        self.last_centroid = np.array([grid_size / 2, grid_size / 2], dtype=np.float32)
+
+    def update(self, grid: np.ndarray) -> dict:
+        """Update sliding template with new grid."""
+        # Normalize grid
+        max_val = np.percentile(grid, 99) + 1e-10
+        grid_norm = grid / max_val
+        self.window.append(grid_norm.copy())
+
+        if len(self.window) > 0:
+            template = np.mean(self.window, axis=0)
+            threshold = np.percentile(template, 50)
+            masked = np.where(template > threshold, template, 0)
+            total = masked.sum()
+
+            if total > 1e-10:
+                rows, cols = _get_coord_grids(self.grid_size, self.grid_size)
+                cr = float((rows * masked).sum() / total)
+                cc = float((cols * masked).sum() / total)
+                self.last_centroid = np.array([cr, cc], dtype=np.float32)
+
+        return {
+            "centroid": self.last_centroid.tolist(),
+            "window_size": len(self.window),
+        }
+
+
+class AdaptiveGaussianTracker:
+    """Adaptive shape tracker v4 with sharp boundaries.
+
+    Maintains a soft shape mask that:
+    - Reinforces where activity matches the expected shape
+    - Tracks out-of-distribution (OOD) activity separately
+    - Only expands shape when OOD persists for N frames
+    - Applies Gaussian smoothing when expanding (adds roundness)
+    - Shrinks inactive regions slowly
+    - Uses sigmoid sharpening for crisp boundary edges
+    - Velocity-smoothed centroid tracking
+    """
+
+    def __init__(
+        self,
+        grid_size: int = 32,
+        persistence_frames: int = 4,
+        expand_sigma: float = 2.0,
+        shape_decay: float = 0.92,
+        ood_threshold_pct: float = 70,
+        expand_rate: float = 0.25,
+        centroid_activity_weight: float = 0.8,
+        shape_regularization: float = 0.8,
+        min_shape_size: int = 20,
+        boundary_sharpness: float = 6.0,
+    ):
+        self.grid_size = grid_size
+        self.persistence_frames = persistence_frames
+        self.expand_sigma = expand_sigma
+        self.shape_decay = shape_decay
+        self.ood_threshold_pct = ood_threshold_pct
+        self.expand_rate = expand_rate
+        self.centroid_activity_weight = centroid_activity_weight
+        self.shape_regularization = shape_regularization
+        self.min_shape_size = min_shape_size
+        self.boundary_sharpness = boundary_sharpness
+
+        # Soft shape mask (values 0-1 representing confidence this cell is part of shape)
+        self.shape_mask = np.zeros((grid_size, grid_size), dtype=np.float32)
+        # OOD persistence counter (how many frames each OOD cell has been active)
+        self.ood_persistence = np.zeros((grid_size, grid_size), dtype=np.float32)
+        # Centroid with velocity smoothing
+        self.centroid = np.array([grid_size / 2, grid_size / 2], dtype=np.float32)
+        self.velocity = np.array([0.0, 0.0], dtype=np.float32)
+        # Coord grids for centroid calc
+        self.rows, self.cols = _get_coord_grids(grid_size, grid_size)
+
+    def _sharpen_boundaries(self, mask: np.ndarray) -> np.ndarray:
+        """Apply sigmoid to create sharp boundaries at threshold 0.5."""
+        return 1.0 / (1.0 + np.exp(-self.boundary_sharpness * (mask - 0.5)))
+
+    def update(self, grid: np.ndarray) -> dict:
+        """Update shape tracker with new grid."""
+        # Normalize grid to 0-1
+        max_val = np.percentile(grid, 99) + 1e-10
+        grid_norm = np.clip(grid / max_val, 0, 1)
+
+        # Determine what's "active" this frame
+        activity_threshold = np.percentile(grid_norm, self.ood_threshold_pct)
+        is_active = grid_norm > activity_threshold
+
+        # Separate in-distribution vs out-of-distribution
+        # In-distribution: active AND already in shape (use 0.5 for crisp boundary)
+        in_shape = self.shape_mask > 0.5
+        is_in_dist = is_active & in_shape
+        is_ood = is_active & ~in_shape
+
+        # 1. Reinforce in-distribution activity
+        self.shape_mask = np.where(
+            is_in_dist,
+            np.minimum(self.shape_mask + 0.1, 1.0),
+            self.shape_mask,
+        )
+
+        # 2. Track OOD persistence
+        self.ood_persistence = np.where(
+            is_ood,
+            self.ood_persistence + 1,
+            np.maximum(self.ood_persistence - 0.3, 0),  # Decay when not active
+        )
+
+        # 3. Expand shape where OOD has persisted
+        persistent_ood = self.ood_persistence >= self.persistence_frames
+        if np.any(persistent_ood):
+            # Create expansion blob with Gaussian smoothing for roundness
+            expansion = gaussian_filter(
+                persistent_ood.astype(np.float32), sigma=self.expand_sigma
+            )
+            expansion = expansion / (expansion.max() + 1e-10)  # Normalize
+
+            # Add to shape mask with stronger initial weight
+            self.shape_mask = np.maximum(self.shape_mask, expansion * 0.6)
+
+            # Reset persistence for cells we just added
+            self.ood_persistence = np.where(persistent_ood, 0, self.ood_persistence)
+
+        # 4. Decay inactive regions of shape (only if above min size)
+        current_area = (self.shape_mask > 0.5).sum()
+        if current_area > self.min_shape_size:
+            is_inactive = ~is_active
+            self.shape_mask = np.where(
+                is_inactive & (self.shape_mask > 0),
+                self.shape_mask * self.shape_decay,
+                self.shape_mask,
+            )
+
+        # 5. Shape regularization (Gaussian smoothing)
+        if self.shape_regularization > 0:
+            self.shape_mask = gaussian_filter(
+                self.shape_mask, sigma=self.shape_regularization
+            )
+
+        # 6. Boundary sharpening - sigmoid pushes toward 0 or 1
+        self.shape_mask = self._sharpen_boundaries(self.shape_mask)
+
+        # 7. Clean up very low values
+        self.shape_mask = np.where(self.shape_mask < 0.1, 0, self.shape_mask)
+        self.shape_mask = np.clip(self.shape_mask, 0, 1)
+
+        # 8. Compute centroid with velocity smoothing
+        # Blend current activity with shape for centroid calculation
+        activity_weight = grid_norm * self.shape_mask
+        shape_weight = self.shape_mask
+        w = self.centroid_activity_weight
+        combined = w * activity_weight + (1 - w) * shape_weight
+
+        total = combined.sum()
+        if total > 1e-10:
+            target_r = (self.rows * combined).sum() / total
+            target_c = (self.cols * combined).sum() / total
+            target = np.array([target_r, target_c], dtype=np.float32)
+
+            # Velocity smoothing
+            new_velocity = (target - self.centroid) * 0.3
+            self.velocity = 0.7 * self.velocity + 0.3 * new_velocity
+            self.centroid = self.centroid + self.velocity
+            self.centroid = np.clip(self.centroid, 0, self.grid_size - 1)
+
+        return {
+            "centroid": self.centroid.tolist(),
+            "shape_mask": self.shape_mask.copy(),
+            "shape_area": float((self.shape_mask > 0.5).sum()),
+            "ood_count": int((self.ood_persistence > 0).sum()),
+        }
+
+
+class DriftTracker:
+    """Combined drift tracker running all algorithms in parallel."""
+
+    def __init__(self, grid_size: int = 32):
+        self.grid_size = grid_size
+        self.elastic_lasso = ElasticLassoTracker(grid_size=grid_size)
+        self.convex_hull = ConvexHullTracker(grid_size=grid_size)
+        self.bounding_box = BoundingBoxTracker(grid_size=grid_size)
+        self.sliding_template = SlidingTemplateTracker(grid_size=grid_size)
+        self.adaptive_gaussian = AdaptiveGaussianTracker(grid_size=grid_size)
+
+    def update(self, grid: np.ndarray) -> dict:
+        """Update all trackers and return combined results."""
+        lasso_result = self.elastic_lasso.update(grid)
+        hull_result = self.convex_hull.update(grid)
+        box_result = self.bounding_box.update(grid)
+        template_result = self.sliding_template.update(grid)
+        gaussian_result = self.adaptive_gaussian.update(grid)
+
+        return {
+            "elastic_lasso": lasso_result,
+            "convex_hull": hull_result,
+            "bounding_box": box_result,
+            "sliding_template": template_result,
+            "adaptive_gaussian": gaussian_result,
+        }
+
+
+# =============================================================================
+# NEURAL PROCESSOR
+# =============================================================================
 
 
 class NeuralProcessor:
@@ -304,13 +724,13 @@ class NeuralProcessor:
         settings: ProcessingSettings | None = None,
         grid_size: int = 32,
         stateless: bool = False,
+        enable_drift_tracking: bool = True,
     ):
         self.fs = fs
         self.grid_size = grid_size
         self.settings = settings or DIFFICULTY_SETTINGS["hard"]
-        self.stateless = (
-            stateless  # If True, no EMA/accumulation - just per-frame processing
-        )
+        self.stateless = stateless
+        self.enable_drift_tracking = enable_drift_tracking
 
         self.bad_detector = BadChannelDetector()
         self.signal_filter = SignalFilter(
@@ -338,6 +758,12 @@ class NeuralProcessor:
         self.smoothed_power: np.ndarray | None = None
         self.smooth_alpha = 0.15  # Higher = more responsive, lower = smoother
 
+        # Drift tracking
+        if enable_drift_tracking:
+            self.drift_tracker = DriftTracker(grid_size=grid_size)
+        else:
+            self.drift_tracker = None
+
     def process_batch(self, neural_data: np.ndarray) -> dict | None:
         """Process a batch of neural data.
 
@@ -345,7 +771,7 @@ class NeuralProcessor:
             neural_data: (batch_size, n_channels) array
 
         Returns:
-            dict with heatmap, centroid, presence, etc. or None if still initializing
+            dict with heatmap, centroid, presence, drift_tracking, etc. or None if still initializing
         """
         chunk = np.asarray(neural_data, dtype=np.float32)
         if chunk.ndim == 1:
@@ -391,7 +817,7 @@ class NeuralProcessor:
                 grid_size=self.grid_size,
             )
             centroid = weighted_centroid(grid, threshold_percentile=50)
-            center_distance = compute_center_distance(centroid, self.grid_size)
+            presence = compute_presence(self.smoothed_power)
         else:
             # Stateful mode: EMA + accumulation for stable tracking
             power, normalized = self.power_extractor.process(filtered)
@@ -416,15 +842,21 @@ class NeuralProcessor:
             )
 
             centroid = weighted_centroid(self.accumulated, threshold_percentile=50)
-            center_distance = compute_center_distance(centroid, self.grid_size)
+            presence = compute_presence(power)
+
+        # Run drift tracking algorithms
+        drift_tracking = None
+        if self.drift_tracker is not None:
+            drift_tracking = self.drift_tracker.update(grid)
 
         return {
             "heatmap": grid,
             "centroid": centroid,
-            "center_distance": center_distance,
+            "presence": presence,
             "bad_channels": int(self.bad_mask.sum())
             if self.bad_mask is not None
             else 0,
+            "drift_tracking": drift_tracking,
         }
 
 
