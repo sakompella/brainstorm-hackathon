@@ -177,7 +177,7 @@ async def consume_raw_stream(
     while True:
         try:
             print(f"[input] connecting to {input_url} ...")
-            async with websockets.connect(input_url, max_queue=2) as ws:
+            async with websockets.connect(input_url, max_queue=2, ping_timeout=None) as ws:
                 async with lock:
                     state.connected_to_input = True
                 print("[input] connected ✅")
