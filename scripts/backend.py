@@ -298,7 +298,7 @@ async def publish_features(
                     "n_ch": state.grid_size**2,
                     "heatmap": result["heatmap"].tolist(),
                     "centroid": result["centroid"].tolist(),
-                    "presence": float(result["presence"]),
+                    "center_distance": float(result["center_distance"]),
                     "confidence": confidence,
                     "bad_channels": result["bad_channels"],
                     "total_samples": int(total_samples),

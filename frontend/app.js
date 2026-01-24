@@ -357,10 +357,10 @@ function updateStatus(status, text) {
  * Update info cards with feature data.
  */
 function updateInfoCards(data) {
-    // Update presence indicator
-    const presence = data.presence || 0;
-    const presenceCard = document.querySelector('.card-coverage .card-body');
-    presenceCard.textContent = `Presence: ${presence.toFixed(3)}`;
+    // Update center indicator (1 = centered, 0 = corner)
+    const center = data.center_distance || 0;
+    const centerCard = document.querySelector('.card-coverage .card-body');
+    centerCard.textContent = `Coverage: ${(center * 100).toFixed(1)}%`;
 
     // Update confidence
     const confidence = data.confidence || 0;

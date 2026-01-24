@@ -274,18 +274,25 @@ def weighted_centroid(grid: np.ndarray, threshold_percentile: float = 50) -> np.
     return np.array([center_row, center_col], dtype=np.float32)
 
 
-def compute_presence(power: np.ndarray, k: int = 50) -> float:
-    """Compute global presence indicator from power.
+def compute_center_distance(centroid: np.ndarray, grid_size: int = 32) -> float:
+    """
+    Distance from centroid to grid center.
+
+    Measures how well the hotspot centroid is centered on the grid, useful for
+    guidance during array positioning. Range [0, 1] where 1 = perfectly centered,
+    0 = at corner of grid.
 
     Args:
-        power: per-channel power array
-        k: number of top channels to average
+        centroid: [row, col] array with centroid position
+        grid_size: grid dimension (default 32 for 32x32 array)
 
     Returns:
-        mean power of top-k channels
+        centering: normalized metric 1.0 (perfectly centered) to 0.0 (corner)
     """
-    topk = np.partition(power.ravel(), -k)[-k:]
-    return float(np.mean(topk))
+    center = grid_size / 2
+    raw = np.sqrt((centroid[0] - center) ** 2 + (centroid[1] - center) ** 2)
+    max_dist = np.sqrt(2) * center
+    return float(1 - (raw / max_dist))
 
 
 class NeuralProcessor:
@@ -301,7 +308,9 @@ class NeuralProcessor:
         self.fs = fs
         self.grid_size = grid_size
         self.settings = settings or DIFFICULTY_SETTINGS["hard"]
-        self.stateless = stateless  # If True, no EMA/accumulation - just per-frame processing
+        self.stateless = (
+            stateless  # If True, no EMA/accumulation - just per-frame processing
+        )
 
         self.bad_detector = BadChannelDetector()
         self.signal_filter = SignalFilter(
@@ -382,7 +391,7 @@ class NeuralProcessor:
                 grid_size=self.grid_size,
             )
             centroid = weighted_centroid(grid, threshold_percentile=50)
-            presence = compute_presence(self.smoothed_power)
+            center_distance = compute_center_distance(centroid, self.grid_size)
         else:
             # Stateful mode: EMA + accumulation for stable tracking
             power, normalized = self.power_extractor.process(filtered)
@@ -407,12 +416,12 @@ class NeuralProcessor:
             )
 
             centroid = weighted_centroid(self.accumulated, threshold_percentile=50)
-            presence = compute_presence(power)
+            center_distance = compute_center_distance(centroid, self.grid_size)
 
         return {
             "heatmap": grid,
             "centroid": centroid,
-            "presence": presence,
+            "center_distance": center_distance,
             "bad_channels": int(self.bad_mask.sum())
             if self.bad_mask is not None
             else 0,
