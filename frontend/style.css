@@ -237,6 +237,34 @@ main {
     min-height: 160px;
 }
 
+
+
+.info-card h2,
+.channel-status h2 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--heading-accent);
+    letter-spacing: -0.01em;
+}
+
+.channel-status {
+    flex: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 180px;
+    max-height: 200px;
+    overflow: hidden;
+}
+
+.channel-status canvas {
+    flex: 1;
+    min-height: 120px;
+    width: 100%;
+    display: block;
+    background: var(--bg-primary);
+}
+
 @media (max-width: 980px) {
     .layout {
         grid-template-columns: 1fr;
