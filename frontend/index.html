@@ -27,30 +27,30 @@
 
         <main>
             <div class="layout">
-                <section class="panel-left panel">
+                <section class="signal-monitor panel">
+                    <h2>High Gamma</h2>
+                    <canvas id="timeseries-canvas"></canvas>
+                </section>
+                <section class="panel-center">
                     <div class="canvas-container panel">
                         <canvas id="neural-canvas"></canvas>
                     </div>
                 </section>
                 <aside class="sidebar">
                     <div class="info-card card card-coverage">
-                        <h2>Surgical Target Coverage</h2>
+                        <h2>Coverage</h2>
                         <div class="card-body">Awaiting data…</div>
                     </div>
                     <div class="info-card card card-move card-centered">
-                        <h2>Move Instruction</h2>
+                        <h2>Move</h2>
                         <div class="card-body">Stand by</div>
                     </div>
                     <div class="info-card panel card-status">
-                        <h2>System Status</h2>
+                        <h2>Status</h2>
                         <div class="card-body">Offline</div>
                     </div>
                 </aside>
             </div>
-            <section class="signal-monitor panel">
-                <h2>High Gamma</h2>
-                <canvas id="timeseries-canvas"></canvas>
-            </section>
         </main>
 
         <footer>

@@ -184,15 +184,18 @@ function resizeTimeSeriesCanvas() {
     if (!timeSeriesCanvas) return;
     const container = timeSeriesCanvas.parentElement;
     if (!container) return;
-    
+
     const rect = container.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    
+
+    // Account for h2 header height (~30px)
+    const availableHeight = rect.height - 30;
+
     timeSeriesCanvas.width = Math.floor(rect.width * dpr);
-    timeSeriesCanvas.height = Math.floor(Math.min(200, rect.height) * dpr);
+    timeSeriesCanvas.height = Math.floor(availableHeight * dpr);
     timeSeriesCanvas.style.width = `${rect.width}px`;
-    timeSeriesCanvas.style.height = `${Math.min(200, rect.height)}px`;
-    
+    timeSeriesCanvas.style.height = `${availableHeight}px`;
+
     if (timeSeriesCtx) {
         timeSeriesCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
@@ -329,9 +332,9 @@ function plotTimeSeries(meanPower, timestamp) {
     
     if (timeSeriesData.length < 2) return;
     
-    const width = (timeSeriesCanvas.width / (window.devicePixelRatio || 1))-40;
+    const width = timeSeriesCanvas.width / (window.devicePixelRatio || 1);
     const height = timeSeriesCanvas.height / (window.devicePixelRatio || 1);
-    const padding = { top: 20, right: 40, bottom: 30, left: 50 };
+    const padding = { top: 10, right: 10, bottom: 20, left: 35 };
     const plotWidth = width - padding.left - padding.right;
     const plotHeight = height - padding.top - padding.bottom;
     
@@ -365,24 +368,24 @@ function plotTimeSeries(meanPower, timestamp) {
     // Draw grid lines
     timeSeriesCtx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
     timeSeriesCtx.lineWidth = 0.5;
-    for (let i = 0; i <= 4; i++) {
-        const y = padding.top + (plotHeight * i / 4);
+    for (let i = 0; i <= 2; i++) {
+        const y = padding.top + (plotHeight * i / 2);
         timeSeriesCtx.beginPath();
         timeSeriesCtx.moveTo(padding.left, y);
         timeSeriesCtx.lineTo(width - padding.right, y);
         timeSeriesCtx.stroke();
     }
     
-    // Draw labels
+    // Draw labels (fewer for narrow column)
     timeSeriesCtx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-    timeSeriesCtx.font = '10px JetBrains Mono, monospace';
+    timeSeriesCtx.font = '8px JetBrains Mono, monospace';
     timeSeriesCtx.textAlign = 'right';
     timeSeriesCtx.textBaseline = 'middle';
-    
-    for (let i = 0; i <= 4; i++) {
-        const value = maxValue - (valueRange * i / 4);
-        const y = padding.top + (plotHeight * i / 4);
-        timeSeriesCtx.fillText(value.toFixed(2), padding.left - 5, y);
+
+    for (let i = 0; i <= 2; i++) {
+        const value = maxValue - (valueRange * i / 2);
+        const y = padding.top + (plotHeight * i / 2);
+        timeSeriesCtx.fillText(value.toFixed(1), padding.left - 3, y);
     }
     
     // Draw time series line (EKG-style, newest at 80% position)
@@ -406,18 +409,6 @@ function plotTimeSeries(meanPower, timestamp) {
     }
     
     timeSeriesCtx.stroke();
-    
-    // Draw axis labels
-    timeSeriesCtx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-    timeSeriesCtx.font = '12px JetBrains Mono, monospace';
-    timeSeriesCtx.textAlign = 'center';
-    timeSeriesCtx.fillText('Time (s)', width / 2, height - 5);
-    
-    timeSeriesCtx.save();
-    timeSeriesCtx.translate(10, height / 2);
-    timeSeriesCtx.rotate(-Math.PI / 2);
-    timeSeriesCtx.fillText('Mean Power (log)', 0, 0);
-    timeSeriesCtx.restore();
 }
 
 /**
