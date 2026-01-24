@@ -22,7 +22,7 @@ sleep 2
 
 # Start frontend server
 echo "Starting frontend server on :8000..."
-uv run python scripts/serve.py > /tmp/serve.log 2>&1 &
+uv run python scripts/serve.py --port 8000 > /tmp/serve.log 2>&1 &
 SERVE_PID=$!
 sleep 2
 
