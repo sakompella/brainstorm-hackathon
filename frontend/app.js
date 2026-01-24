@@ -9,14 +9,8 @@ const MAGMA_COLORMAP = generateMagmaColormap();
 
 // State
 let ws = null;
-let gridSize = 96; // Full heatmap display size
+let gridSize = 32;
 let isConnected = false;
-
-// Layer7 (focused region) configuration
-let layer7Center = { row: 20, col: 30 }; // Center of the 32x32 layer7 array
-let layer7Size = 32; // Size of the layer7 array
-let fullOpacityRadius = 16; // Radius at full opacity
-let minOpacity = 0.2; // Minimum opacity for areas outside layer7
 
 // FPS tracking
 let frameCount = 0;
@@ -38,9 +32,9 @@ let ctx = null;
 let canvasWidth = 32;
 let canvasHeight = 32;
 
-// Value range for colormap (log-normalized bandpower)
-let vMin = -2.0;
-let vMax = 2.0;
+// Value range for colormap (auto-scaled from data)
+let vMin = 0.0;
+let vMax = 0.01;
 
 /**
  * Resize canvas to fit container.
@@ -184,41 +178,6 @@ function initCanvas() {
 }
 
 /**
- * Calculate opacity for a cell based on whether it's inside the layer7 box.
- */
-function getLayer7Opacity(row, col) {
-    // Calculate layer7 boundaries (32x32 box centered at layer7Center)
-    const halfSize = layer7Size / 2;
-    const minRow = layer7Center.row - halfSize;
-    const maxRow = layer7Center.row + halfSize;
-    const minCol = layer7Center.col - halfSize;
-    const maxCol = layer7Center.col + halfSize;
-    
-    // Check if cell is inside the layer7 box
-    if (row >= minRow && row < maxRow && col >= minCol && col < maxCol) {
-        return 1.0; // High opacity inside layer7
-    } else {
-        return minOpacity; // Low opacity outside layer7
-    }
-}
-
-/**
- * Upscale 32x32 heatmap to 96x96 using nearest neighbor interpolation.
- */
-function upscaleHeatmap(heatmap32) {
-    const heatmap96 = [];
-    for (let row = 0; row < 96; row++) {
-        heatmap96[row] = [];
-        for (let col = 0; col < 96; col++) {
-            const srcRow = Math.floor(row / 3);
-            const srcCol = Math.floor(col / 3);
-            heatmap96[row][col] = heatmap32[srcRow][srcCol];
-        }
-    }
-    return heatmap96;
-}
-
-/**
  * Resize time series canvas to fit container.
  */
 function resizeTimeSeriesCanvas() {
@@ -240,63 +199,51 @@ function resizeTimeSeriesCanvas() {
 }
 
 /**
- * Render heatmap with layer7 effect.
+ * Render heatmap.
  */
 function renderHeatmap(heatmap) {
     if (!heatmap || !ctx) return;
 
-    // Handle different input sizes
-    let fullHeatmap = heatmap;
-    if (heatmap.length === 32) {
-        // Upscale 32x32 to 96x96
-        fullHeatmap = upscaleHeatmap(heatmap);
+    const rows = heatmap.length;
+    const cols = heatmap[0].length;
+
+    // Auto-scale vMax based on data (smoothed EMA to avoid flicker)
+    let maxVal = 0;
+    for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+            if (heatmap[row][col] > maxVal) maxVal = heatmap[row][col];
+        }
     }
+    vMax = 0.9 * vMax + 0.1 * Math.max(maxVal, 0.001);
 
     const size = Math.min(canvasWidth, canvasHeight);
     const padding = Math.max(4, Math.floor(size * 0.04));
     const plotSize = Math.max(1, size - 2 * padding);
-    const cellSize = plotSize / 96; // Always render as 96x96
+    const cellSize = plotSize / cols;
 
     // Clear canvas
     ctx.fillStyle = '#0a0a0f';
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-    // Draw heatmap with layer7 effect
-    for (let row = 0; row < 96; row++) {
-        for (let col = 0; col < 96; col++) {
-            const value = fullHeatmap[row][col];
+    // Draw heatmap
+    for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+            const value = heatmap[row][col];
             const x = padding + col * cellSize;
             const y = padding + row * cellSize;
 
-            // Get base color
             const colorIdx = valueToColorIndex(value);
             const [r, g, b] = MAGMA_COLORMAP[colorIdx];
-            
-            // Apply layer7 opacity
-            const opacity = getLayer7Opacity(row, col);
-            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${opacity})`;
-            ctx.fillRect(x, y, cellSize, cellSize);
+            ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+            ctx.fillRect(x, y, cellSize + 0.5, cellSize + 0.5);
         }
     }
 
-    // Draw layer7 outline (32x32 grid centered on layer7)
-    const layer7StartRow = layer7Center.row - layer7Size / 2;
-    const layer7StartCol = layer7Center.col - layer7Size / 2;
-    
-    ctx.strokeStyle = 'rgba(255, 255, 100, 0.5)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(
-        padding + layer7StartCol * cellSize,
-        padding + layer7StartRow * cellSize,
-        layer7Size * cellSize,
-        layer7Size * cellSize
-    );
-
-    // Draw grid overlay (lighter in layer7 area)
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+    // Draw grid overlay
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
     ctx.lineWidth = 0.5;
     ctx.beginPath();
-    for (let i = 0; i <= 96; i += 3) {
+    for (let i = 0; i <= cols; i++) {
         const offset = padding + i * cellSize;
         ctx.moveTo(offset, padding);
         ctx.lineTo(offset, padding + plotSize);
