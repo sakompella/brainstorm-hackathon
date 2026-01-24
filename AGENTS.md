@@ -16,12 +16,19 @@ make install
 uv run python -m scripts.download super_easy
 uv run python -m scripts.download hard
 
-# Run data streamer (FastAPI WebSocket @ ws://localhost:8765)
+# Option A: Quick start with start_all.sh (recommended for development)
+# Starts all services: stream_data.py, middleware, and unified backend
+./start_all.sh
+
+# Option B: Manual service startup
+# Terminal 1: Run data streamer (FastAPI WebSocket @ ws://localhost:8765)
 uv run brainstorm-stream --from-file data/hard/
 
-# Option A: Unified backend (recommended)
-# Connects to stream_data.py and serves frontend + WebSocket at :8000
+# Terminal 2: Run unified backend (connects to stream + serves frontend at :8000)
 uv run brainstorm-backend --upstream-url ws://localhost:8765
+
+# Terminal 3 (optional): Run middleware on :8787
+uv run python run_middleware.py
 
 # Validation helpers
 make format       # ruff format
@@ -37,12 +44,12 @@ make check-all    # run format + lint + type + tests
 ```
 
 - `scripts/stream_data.py` — FastAPI + uvicorn; streams data at 500 Hz (JSON batches).
-- `scripts/backend.py` — Unified backend: WebSocket client to stream_data.py + signal processing + WebSocket server for browsers at `/ws` + static file server.
+- `scripts/backend.py` — Unified backend: WebSocket client to stream_data.py + signal processing + WebSocket server for browsers at `/ws` + static file server (serves `frontend/`).
 - `scripts/signal_processing.py` — Signal processing module: `ActivityEMA` for per-channel activity, `compute_presence` for global indicator.
 - `scripts/serve.py` — FastAPI static server wrapping `frontend/` (legacy, for direct browser-to-stream connection).
 - `scripts/download.py` — HuggingFace helper for datasets (`track2_data.parquet`, `metadata.json`, `ground_truth.parquet`).
 - `scripts/control_client.py` — Sends keyboard commands during live evaluation.
-- `frontend/` — Main visualization UI (serves from backend.py or serve.py).
+- `frontend/` — Main visualization UI (served from backend.py or serve.py).
 - `docs/` — Authoritative specs (overview, data_stream protocol, submission rules, persona, etc.). Always check docs before changing behavior.
 
 ## WebSocket Protocols
