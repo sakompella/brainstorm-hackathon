@@ -20,10 +20,6 @@ let currentFps = 0;
 // Time tracking
 let currentTime = 0.0;
 
-// Baseline for dB conversion
-let baselineMeanPower = null;
-const DB_EPS = 1e-12;
-
 // Time series data
 let timeSeriesData = [];
 let maxTimeSeriesPoints = 500;
@@ -49,17 +45,20 @@ function resizeCanvasToContainer() {
     if (!container) return;
 
     const rect = container.getBoundingClientRect();
-    const width = Math.floor(rect.width);
-    const height = Math.floor(rect.height);
+    // Use full container size minus padding
+    const padding = 32; // account for panel padding
+    const availWidth = rect.width - padding;
+    const availHeight = rect.height - padding;
+    const size = Math.max(200, Math.floor(Math.min(availWidth, availHeight)));
     const dpr = window.devicePixelRatio || 1;
 
-    canvas.width = Math.floor(width * dpr);
-    canvas.height = Math.floor(height * dpr);
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
+    canvas.width = Math.floor(size * dpr);
+    canvas.height = Math.floor(size * dpr);
+    canvas.style.width = `${size}px`;
+    canvas.style.height = `${size}px`;
 
-    canvasWidth = width;
-    canvasHeight = height;
+    canvasWidth = size;
+    canvasHeight = size;
 
     if (ctx) {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -188,15 +187,18 @@ function resizeTimeSeriesCanvas() {
     if (!timeSeriesCanvas) return;
     const container = timeSeriesCanvas.parentElement;
     if (!container) return;
-    
+
     const rect = container.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    
+
+    // Account for h2 header height (~30px)
+    const availableHeight = rect.height - 30;
+
     timeSeriesCanvas.width = Math.floor(rect.width * dpr);
-    timeSeriesCanvas.height = Math.floor(Math.min(200, rect.height) * dpr);
+    timeSeriesCanvas.height = Math.floor(availableHeight * dpr);
     timeSeriesCanvas.style.width = `${rect.width}px`;
-    timeSeriesCanvas.style.height = `${Math.min(200, rect.height)}px`;
-    
+    timeSeriesCanvas.style.height = `${availableHeight}px`;
+
     if (timeSeriesCtx) {
         timeSeriesCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
@@ -205,13 +207,13 @@ function resizeTimeSeriesCanvas() {
 /**
  * Render heatmap.
  */
-function renderHeatmap(heatmap, centroid) {
+function renderHeatmap(heatmap, driftTracking) {
     if (!heatmap || !ctx) return;
 
     const rows = heatmap.length;
     const cols = heatmap[0].length;
 
-    // Auto-scale vMax based on data
+    // Auto-scale vMax based on data (smoothed EMA to avoid flicker)
     let maxVal = 0;
     for (let row = 0; row < rows; row++) {
         for (let col = 0; col < cols; col++) {
@@ -222,31 +224,19 @@ function renderHeatmap(heatmap, centroid) {
 
     const size = Math.min(canvasWidth, canvasHeight);
     const padding = Math.max(4, Math.floor(size * 0.04));
-    const plotSize = Math.max(1, (size - 2 * padding) * 0.6); // Make heatmap 60% of available space
+    const plotSize = Math.max(1, size - 2 * padding);
     const cellSize = plotSize / cols;
 
     // Clear canvas
     ctx.fillStyle = '#0a0a0f';
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-    // Calculate offset to center the centroid (hotspot) at canvas center
-    let offsetX = 0;
-    let offsetY = 0;
-    if (centroid) {
-        const [cy, cx] = centroid;
-        // Offset needed to place centroid at the absolute center of the canvas
-        const centerX = canvasWidth / 2;
-        const centerY = canvasHeight / 2;
-        offsetX = centerX - (padding + (cx + 0.5) * cellSize);
-        offsetY = centerY - (padding + (cy + 0.5) * cellSize);
-    }
-
-    // Draw heatmap with offset
+    // Draw heatmap
     for (let row = 0; row < rows; row++) {
         for (let col = 0; col < cols; col++) {
             const value = heatmap[row][col];
-            const x = padding + col * cellSize + offsetX;
-            const y = padding + row * cellSize + offsetY;
+            const x = padding + col * cellSize;
+            const y = padding + row * cellSize;
 
             const colorIdx = valueToColorIndex(value);
             const [r, g, b] = MAGMA_COLORMAP[colorIdx];
@@ -255,111 +245,85 @@ function renderHeatmap(heatmap, centroid) {
         }
     }
 
-    // Draw grid overlay with offset
+    // Draw adaptive gaussian shape mask overlay
+    if (driftTracking && driftTracking.adaptive_gaussian) {
+        const ag = driftTracking.adaptive_gaussian;
+        const shapeMask = ag.shape_mask;
+
+        if (shapeMask && shapeMask.length === rows) {
+            // Draw shape boundary (cyan outline where mask > 0.5)
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.8)';
+            ctx.lineWidth = 2;
+
+            // Find boundary cells (mask > 0.5 with at least one neighbor < 0.5)
+            for (let row = 0; row < rows; row++) {
+                for (let col = 0; col < cols; col++) {
+                    if (shapeMask[row][col] > 0.5) {
+                        const x = padding + col * cellSize;
+                        const y = padding + row * cellSize;
+
+                        // Check if this is a boundary cell
+                        let isBoundary = false;
+                        if (row === 0 || row === rows - 1 || col === 0 || col === cols - 1) {
+                            isBoundary = true;
+                        } else {
+                            // Check neighbors
+                            if (shapeMask[row-1][col] <= 0.5 || shapeMask[row+1][col] <= 0.5 ||
+                                shapeMask[row][col-1] <= 0.5 || shapeMask[row][col+1] <= 0.5) {
+                                isBoundary = true;
+                            }
+                        }
+
+                        if (isBoundary) {
+                            // Draw cell outline
+                            ctx.strokeRect(x, y, cellSize, cellSize);
+                        } else {
+                            // Fill interior with semi-transparent cyan
+                            ctx.fillStyle = 'rgba(0, 255, 255, 0.15)';
+                            ctx.fillRect(x, y, cellSize, cellSize);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Draw centroid marker
+        if (ag.centroid) {
+            const [centroidRow, centroidCol] = ag.centroid;
+            const cx = padding + centroidCol * cellSize + cellSize / 2;
+            const cy = padding + centroidRow * cellSize + cellSize / 2;
+
+            // Draw crosshair
+            const crossSize = cellSize * 1.5;
+            ctx.strokeStyle = 'rgba(0, 255, 255, 1)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(cx - crossSize, cy);
+            ctx.lineTo(cx + crossSize, cy);
+            ctx.moveTo(cx, cy - crossSize);
+            ctx.lineTo(cx, cy + crossSize);
+            ctx.stroke();
+
+            // Draw center dot
+            ctx.fillStyle = 'cyan';
+            ctx.beginPath();
+            ctx.arc(cx, cy, cellSize * 0.4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    // Draw grid overlay
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
     ctx.lineWidth = 0.5;
     ctx.beginPath();
     for (let i = 0; i <= cols; i++) {
-        const x = padding + i * cellSize + offsetX;
-        ctx.moveTo(x, padding + offsetY);
-        ctx.lineTo(x, padding + plotSize + offsetY);
-    }
-    for (let i = 0; i <= rows; i++) {
-        const y = padding + i * cellSize + offsetY;
-        ctx.moveTo(padding + offsetX, y);
-        ctx.lineTo(padding + plotSize + offsetX, y);
+        const offset = padding + i * cellSize;
+        ctx.moveTo(offset, padding);
+        ctx.lineTo(offset, padding + plotSize);
+        ctx.moveTo(padding, offset);
+        ctx.lineTo(padding + plotSize, offset);
     }
     ctx.stroke();
-
-    // Draw border around heatmap
-    ctx.strokeStyle = 'rgba(89, 224, 255, 0.5)';
-    ctx.lineWidth = 4;
-    ctx.strokeRect(
-        padding + offsetX,
-        padding + offsetY,
-        plotSize,
-        plotSize
-    );
-
-    // Draw centroid if provided (now always at center)
-    if (centroid) {
-        const [cy, cx] = centroid; // backend sends [y,x]
-        
-        // Centroid is now fixed at absolute canvas center
-        const centerX = canvasWidth / 2;
-        const centerY = canvasHeight / 2;
-        
-        ctx.strokeStyle = 'cyan';
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.arc(
-            centerX,
-            centerY,
-            Math.max(15, cellSize * 1.5),
-            0,
-            2 * Math.PI
-        );
-        ctx.stroke();
-
-        // --- Compute vector from array center (16,16) to centroid ---
-        const arrayCenter = [rows / 2, cols / 2]; // [16, 16]
-        let vecX = cx - arrayCenter[1];
-        let vecY = cy - arrayCenter[0];
-
-        // Compute magnitude
-        const mag = Math.sqrt(vecX ** 2 + vecY ** 2) || 1; // avoid div0
-        const unitX = vecX / mag;
-        const unitY = vecY / mag;
-
-        // Draw arrow from array center (with offset, so it moves) to centroid (fixed at center)
-        const arrayCenterX = padding + (arrayCenter[1] + 0.5) * cellSize + offsetX;
-        const arrayCenterY = padding + (arrayCenter[0] + 0.5) * cellSize + offsetY;
-        
-        ctx.strokeStyle = 'lime';
-        ctx.lineWidth = 6;
-        ctx.beginPath();
-        ctx.moveTo(arrayCenterX, arrayCenterY);
-        ctx.lineTo(centerX, centerY);
-        ctx.stroke();
-
-        // Draw arrowhead in the middle of the line
-        const midX = (arrayCenterX + centerX) / 2;
-        const midY = (arrayCenterY + centerY) / 2;
-        const arrowSize = 20;
-        const angle = Math.atan2(centerY - arrayCenterY, centerX - arrayCenterX);
-        
-        ctx.fillStyle = 'lime';
-        ctx.beginPath();
-        ctx.moveTo(midX, midY);
-        ctx.lineTo(
-            midX - arrowSize * Math.cos(angle - Math.PI / 6),
-            midY - arrowSize * Math.sin(angle - Math.PI / 6)
-        );
-        ctx.lineTo(
-            midX - arrowSize * Math.cos(angle + Math.PI / 6),
-            midY - arrowSize * Math.sin(angle + Math.PI / 6)
-        );
-        ctx.closePath();
-        ctx.fill();
-
-        // --- Translate unit vector into neuro/medical directions ---
-        let direction = '';
-        if (Math.abs(unitY) < 0.3 && unitX > 0.3) direction = 'Right';
-        else if (Math.abs(unitY) < 0.3 && unitX < -0.3) direction = 'Left';
-        else if (Math.abs(unitX) < 0.3 && unitY > 0.3) direction = 'Posterior';
-        else if (Math.abs(unitX) < 0.3 && unitY < -0.3) direction = 'Anterior';
-        else if (unitX > 0 && unitY < 0) direction = 'Anterior-Right';
-        else if (unitX < 0 && unitY < 0) direction = 'Anterior-Left';
-        else if (unitX > 0 && unitY > 0) direction = 'Posterior-Right';
-        else if (unitX < 0 && unitY > 0) direction = 'Posterior-Left';
-        else direction = 'Center';
-
-        // Update move instruction card
-        const directionDisplay = document.getElementById('direction-display');
-        if (directionDisplay) {
-            directionDisplay.textContent = direction;
-        }
-    }
 
     // Update FPS counter
     frameCount++;
@@ -371,7 +335,6 @@ function renderHeatmap(heatmap, centroid) {
         document.getElementById('fps-counter').textContent = `${currentFps} FPS`;
     }
 }
-
 
 /**
  * Update connection status UI.
@@ -412,22 +375,25 @@ function updateStatus(status, text) {
  * Update info cards with feature data.
  */
 function updateInfoCards(data) {
-    // Update center indicator (1 = centered, 0 = corner)
-    const center = data.center_distance || 0;
-    const centerCard = document.querySelector('.card-coverage .card-body');
-    if (centerCard) {
-        centerCard.textContent = `Coverage: ${(center * 100).toFixed(1)}%`;
-    }
+    // Update presence indicator
+    const presence = data.presence || 0;
+    const presenceCard = document.querySelector('.card-coverage .card-body');
+    presenceCard.textContent = `Presence: ${presence.toFixed(3)}`;
+
+    // Update confidence
+    const confidence = data.confidence || 0;
+    const statusCard = document.querySelector('.card-status .card-body');
+    statusCard.textContent = confidence > 0.5 ? 'Online' : 'Offline';
 }
 
 /**
  * Plot time series data.
  */
-function plotTimeSeries(meanPowerDb, timestamp) {
+function plotTimeSeries(meanPower, timestamp) {
     if (!timeSeriesCtx || !timeSeriesCanvas) return;
     
     // Add new data point
-    timeSeriesData.push({ t: timestamp, value: meanPowerDb });
+    timeSeriesData.push({ t: timestamp, value: meanPower });
     
     // Keep only recent data
     if (timeSeriesData.length > maxTimeSeriesPoints) {
@@ -436,9 +402,9 @@ function plotTimeSeries(meanPowerDb, timestamp) {
     
     if (timeSeriesData.length < 2) return;
     
-    const width = (timeSeriesCanvas.width / (window.devicePixelRatio || 1))-40;
+    const width = timeSeriesCanvas.width / (window.devicePixelRatio || 1);
     const height = timeSeriesCanvas.height / (window.devicePixelRatio || 1);
-    const padding = { top: 20, right: 40, bottom: 30, left: 50 };
+    const padding = { top: 10, right: 10, bottom: 20, left: 35 };
     const plotWidth = width - padding.left - padding.right;
     const plotHeight = height - padding.top - padding.bottom;
     
@@ -452,13 +418,13 @@ function plotTimeSeries(meanPowerDb, timestamp) {
     const maxValue = Math.max(...values);
     const valueRange = maxValue - minValue || 1;
     
-    // EKG-style: newest data at 70% of the plot width
+    // EKG-style: newest data at 80% of the plot width
     const latestTime = timeSeriesData[timeSeriesData.length - 1].t;
     const oldestTime = timeSeriesData[0].t;
     const actualTimeRange = latestTime - oldestTime || 1;
     
-    // Scale time range so that the actual data spans 70% of the width
-    const displayTimeRange = actualTimeRange / 0.70;
+    // Scale time range so that the actual data spans 80% of the width
+    const displayTimeRange = actualTimeRange / 0.85;
     
     // Draw axes
     timeSeriesCtx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
@@ -472,36 +438,36 @@ function plotTimeSeries(meanPowerDb, timestamp) {
     // Draw grid lines
     timeSeriesCtx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
     timeSeriesCtx.lineWidth = 0.5;
-    for (let i = 0; i <= 4; i++) {
-        const y = padding.top + (plotHeight * i / 4);
+    for (let i = 0; i <= 2; i++) {
+        const y = padding.top + (plotHeight * i / 2);
         timeSeriesCtx.beginPath();
         timeSeriesCtx.moveTo(padding.left, y);
         timeSeriesCtx.lineTo(width - padding.right, y);
         timeSeriesCtx.stroke();
     }
     
-    // Draw labels
+    // Draw labels (fewer for narrow column)
     timeSeriesCtx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-    timeSeriesCtx.font = '10px JetBrains Mono, monospace';
+    timeSeriesCtx.font = '8px JetBrains Mono, monospace';
     timeSeriesCtx.textAlign = 'right';
     timeSeriesCtx.textBaseline = 'middle';
-    
-    for (let i = 0; i <= 4; i++) {
-        const value = maxValue - (valueRange * i / 4);
-        const y = padding.top + (plotHeight * i / 4);
-        timeSeriesCtx.fillText(value.toFixed(2), padding.left - 5, y);
+
+    for (let i = 0; i <= 2; i++) {
+        const value = maxValue - (valueRange * i / 2);
+        const y = padding.top + (plotHeight * i / 2);
+        timeSeriesCtx.fillText(value.toFixed(1), padding.left - 3, y);
     }
     
-    // Draw time series line (EKG-style, newest at 70% position)
+    // Draw time series line (EKG-style, newest at 80% position)
     timeSeriesCtx.strokeStyle = '#ff6b6b';
     timeSeriesCtx.lineWidth = 2;
     timeSeriesCtx.beginPath();
     
     for (let i = 0; i < timeSeriesData.length; i++) {
         const d = timeSeriesData[i];
-        // Position relative to latest time, with latest at 70% of plot width
+        // Position relative to latest time, with latest at 80% of plot width
         const timeFromLatest = latestTime - d.t;
-        const normalizedPosition = 0.7 - (timeFromLatest / displayTimeRange);
+        const normalizedPosition = 0.8 - (timeFromLatest / displayTimeRange);
         const x = padding.left + 60 + normalizedPosition * plotWidth;
         const y = height - padding.bottom - ((d.value - minValue) / valueRange) * plotHeight;
         
@@ -513,18 +479,6 @@ function plotTimeSeries(meanPowerDb, timestamp) {
     }
     
     timeSeriesCtx.stroke();
-    
-    // Draw axis labels
-    timeSeriesCtx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-    timeSeriesCtx.font = '12px JetBrains Mono, monospace';
-    timeSeriesCtx.textAlign = 'center';
-    timeSeriesCtx.fillText('Time (s)', width / 2, height - 5);
-    
-    timeSeriesCtx.save();
-    timeSeriesCtx.translate(10, height / 2);
-    timeSeriesCtx.rotate(-Math.PI / 2);
-    timeSeriesCtx.fillText('Mean Power (dB)', 0, 0);
-    timeSeriesCtx.restore();
 }
 
 /**
@@ -559,14 +513,16 @@ function connect() {
 
                     // Update channel count (grid size from heatmap)
                     const heatmap = data.heatmap;
-                    const centroid = data.centroid;
                     if (heatmap && heatmap.length > 0) {
                         const dataSize = heatmap.length;
                         const nChannels = 96 * 96;
                         document.getElementById('channel-count').textContent = `${nChannels} channels (${dataSize}x${dataSize} data)`;
 
-                        // Render heatmap
-                        renderHeatmap(heatmap, centroid);
+                        // Render heatmap with drift tracking overlay
+                        if (data.drift_tracking && data.drift_tracking.adaptive_gaussian) {
+                            console.log('Gauss mask area:', data.drift_tracking.adaptive_gaussian.shape_area);
+                        }
+                        renderHeatmap(heatmap, data.drift_tracking);
 
                         // Update info cards
                         updateInfoCards(data);
@@ -581,13 +537,9 @@ function connect() {
                             }
                         }
                         const meanPower = count > 0 ? sum / count : 0;
-                        if (baselineMeanPower === null) {
-                            baselineMeanPower = Math.max(meanPower, DB_EPS);
-                        }
-                        const dbPower = 10 * Math.log10(Math.max(meanPower, DB_EPS) / baselineMeanPower);
                         
                         // Plot time series
-                        plotTimeSeries(dbPower, currentTime);
+                        plotTimeSeries(meanPower, currentTime);
                     }
                 }
             } catch (err) {

@@ -331,6 +331,11 @@ async def publish_features(
                         "sliding_template": {
                             "centroid": drift["sliding_template"]["centroid"],
                         },
+                        "adaptive_gaussian": {
+                            "centroid": drift["adaptive_gaussian"]["centroid"],
+                            "shape_mask": drift["adaptive_gaussian"]["shape_mask"].tolist(),
+                            "shape_area": drift["adaptive_gaussian"]["shape_area"],
+                        },
                     }
 
                 # orjson is 5-10x faster than stdlib json (decode to str for JS compatibility)
