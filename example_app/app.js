@@ -20,6 +20,12 @@ let currentFps = 0;
 // Time tracking
 let currentTime = 0.0;
 
+// Time series data
+let timeSeriesData = [];
+let maxTimeSeriesPoints = 500;
+let timeSeriesCanvas = null;
+let timeSeriesCtx = null;
+
 // Canvas and rendering
 let canvas = null;
 let ctx = null;
@@ -162,6 +168,34 @@ function initCanvas() {
     canvas = document.getElementById('neural-canvas');
     ctx = canvas.getContext('2d');
     resizeCanvasToContainer();
+    
+    // Initialize time series canvas
+    timeSeriesCanvas = document.getElementById('timeseries-canvas');
+    if (timeSeriesCanvas) {
+        timeSeriesCtx = timeSeriesCanvas.getContext('2d');
+        resizeTimeSeriesCanvas();
+    }
+}
+
+/**
+ * Resize time series canvas to fit container.
+ */
+function resizeTimeSeriesCanvas() {
+    if (!timeSeriesCanvas) return;
+    const container = timeSeriesCanvas.parentElement;
+    if (!container) return;
+    
+    const rect = container.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    
+    timeSeriesCanvas.width = Math.floor(rect.width * dpr);
+    timeSeriesCanvas.height = Math.floor(Math.min(200, rect.height) * dpr);
+    timeSeriesCanvas.style.width = `${rect.width}px`;
+    timeSeriesCanvas.style.height = `${Math.min(200, rect.height)}px`;
+    
+    if (timeSeriesCtx) {
+        timeSeriesCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
 }
 
 /**
@@ -263,11 +297,113 @@ function updateInfoCards(data) {
     const confidence = data.confidence || 0;
     const statusCard = document.querySelector('.card-status .card-body');
     statusCard.textContent = confidence > 0.5 ? 'Online' : 'Offline';
+}
 
-    // Update band info
-    const band = data.band || [70, 150];
-    const monitorBody = document.querySelector('.monitor-body');
-    monitorBody.textContent = `Bandpower: ${band[0]}-${band[1]} Hz | Samples: ${data.total_samples || 0}`;
+/**
+ * Plot time series data.
+ */
+function plotTimeSeries(meanPower, timestamp) {
+    if (!timeSeriesCtx || !timeSeriesCanvas) return;
+    
+    // Add new data point
+    timeSeriesData.push({ t: timestamp, value: meanPower });
+    
+    // Keep only recent data
+    if (timeSeriesData.length > maxTimeSeriesPoints) {
+        timeSeriesData.shift();
+    }
+    
+    if (timeSeriesData.length < 2) return;
+    
+    const width = (timeSeriesCanvas.width / (window.devicePixelRatio || 1))-40;
+    const height = timeSeriesCanvas.height / (window.devicePixelRatio || 1);
+    const padding = { top: 20, right: 40, bottom: 30, left: 50 };
+    const plotWidth = width - padding.left - padding.right;
+    const plotHeight = height - padding.top - padding.bottom;
+    
+    // Clear canvas
+    timeSeriesCtx.fillStyle = '#0a0a0f';
+    timeSeriesCtx.fillRect(0, 0, width, height);
+    
+    // Find data range
+    const values = timeSeriesData.map(d => d.value);
+    const minValue = Math.min(...values);
+    const maxValue = Math.max(...values);
+    const valueRange = maxValue - minValue || 1;
+    
+    // EKG-style: newest data at 80% of the plot width
+    const latestTime = timeSeriesData[timeSeriesData.length - 1].t;
+    const oldestTime = timeSeriesData[0].t;
+    const actualTimeRange = latestTime - oldestTime || 1;
+    
+    // Scale time range so that the actual data spans 80% of the width
+    const displayTimeRange = actualTimeRange / 0.85;
+    
+    // Draw axes
+    timeSeriesCtx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+    timeSeriesCtx.lineWidth = 1;
+    timeSeriesCtx.beginPath();
+    timeSeriesCtx.moveTo(padding.left, padding.top);
+    timeSeriesCtx.lineTo(padding.left, height - padding.bottom);
+    timeSeriesCtx.lineTo(width - padding.right, height - padding.bottom);
+    timeSeriesCtx.stroke();
+    
+    // Draw grid lines
+    timeSeriesCtx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+    timeSeriesCtx.lineWidth = 0.5;
+    for (let i = 0; i <= 4; i++) {
+        const y = padding.top + (plotHeight * i / 4);
+        timeSeriesCtx.beginPath();
+        timeSeriesCtx.moveTo(padding.left, y);
+        timeSeriesCtx.lineTo(width - padding.right, y);
+        timeSeriesCtx.stroke();
+    }
+    
+    // Draw labels
+    timeSeriesCtx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+    timeSeriesCtx.font = '10px JetBrains Mono, monospace';
+    timeSeriesCtx.textAlign = 'right';
+    timeSeriesCtx.textBaseline = 'middle';
+    
+    for (let i = 0; i <= 4; i++) {
+        const value = maxValue - (valueRange * i / 4);
+        const y = padding.top + (plotHeight * i / 4);
+        timeSeriesCtx.fillText(value.toFixed(2), padding.left - 5, y);
+    }
+    
+    // Draw time series line (EKG-style, newest at 80% position)
+    timeSeriesCtx.strokeStyle = '#ff6b6b';
+    timeSeriesCtx.lineWidth = 2;
+    timeSeriesCtx.beginPath();
+    
+    for (let i = 0; i < timeSeriesData.length; i++) {
+        const d = timeSeriesData[i];
+        // Position relative to latest time, with latest at 80% of plot width
+        const timeFromLatest = latestTime - d.t;
+        const normalizedPosition = 0.8 - (timeFromLatest / displayTimeRange);
+        const x = padding.left + 60 + normalizedPosition * plotWidth;
+        const y = height - padding.bottom - ((d.value - minValue) / valueRange) * plotHeight;
+        
+        if (i === 0) {
+            timeSeriesCtx.moveTo(x, y);
+        } else {
+            timeSeriesCtx.lineTo(x, y);
+        }
+    }
+    
+    timeSeriesCtx.stroke();
+    
+    // Draw axis labels
+    timeSeriesCtx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    timeSeriesCtx.font = '12px JetBrains Mono, monospace';
+    timeSeriesCtx.textAlign = 'center';
+    timeSeriesCtx.fillText('Time (s)', width / 2, height - 5);
+    
+    timeSeriesCtx.save();
+    timeSeriesCtx.translate(10, height / 2);
+    timeSeriesCtx.rotate(-Math.PI / 2);
+    timeSeriesCtx.fillText('Mean Power (log)', 0, 0);
+    timeSeriesCtx.restore();
 }
 
 /**
@@ -312,6 +448,20 @@ function connect() {
 
                         // Update info cards
                         updateInfoCards(data);
+                        
+                        // Calculate mean bandpower for time series
+                        let sum = 0;
+                        let count = 0;
+                        for (let row = 0; row < heatmap.length; row++) {
+                            for (let col = 0; col < heatmap[row].length; col++) {
+                                sum += heatmap[row][col];
+                                count++;
+                            }
+                        }
+                        const meanPower = count > 0 ? sum / count : 0;
+                        
+                        // Plot time series
+                        plotTimeSeries(meanPower, currentTime);
                     }
                 }
             } catch (err) {
@@ -341,7 +491,10 @@ function connect() {
  */
 function init() {
     initCanvas();
-    window.addEventListener('resize', resizeCanvasToContainer);
+    window.addEventListener('resize', () => {
+        resizeCanvasToContainer();
+        resizeTimeSeriesCanvas();
+    });
 
     // Connect button handler
     document.getElementById('connect-btn').addEventListener('click', connect);
