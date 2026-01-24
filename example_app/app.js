@@ -32,42 +32,14 @@ let lastFrameTime = 0.0;
 // Canvas and rendering
 let canvas = null;
 let ctx = null;
-let canvasWidth = 600;
-let canvasHeight = 600;
+let canvasWidth = 32;
+let canvasHeight = 32;
 let channelSize = 14;
 
 // Value range for colormap
-let vMin = -0.3;
-let vMax = 0.3;
-
-// Temporal smoothing (EMA)
-let smoothedValues = null;  // Per-channel smoothed values
-let smoothingFactor = 0.85; // Higher = more smoothing (0.0 to 0.99)
-
-// Adaptive normalization
-let runningMax = 0.1;       // Tracks max absolute value seen
-let maxDecay = 0.995;       // How fast the running max decays (closer to 1 = slower decay)
-let useAdaptiveNorm = true; // Toggle adaptive normalization
-
-// Diverging colormap: cyan (negative) → black (zero) → magenta (positive)
-// Uses power curve to keep values near zero dark (matches gradient bar)
-function valueToDivergingColor(value) {
-    const normalized = (value - vMin) / (vMax - vMin); // 0 to 1
-    const centered = normalized * 2 - 1; // -1 to 1 (0 = middle)
-
-    // Power curve: values near 0 stay dark, extremes get bright
-    const power = 2.5;
-
-    if (centered < 0) {
-        // Negative: black → cyan
-        const i = Math.pow(Math.abs(centered), 1/power);
-        return `rgb(0, ${Math.round(i * 255)}, ${Math.round(i * 255)})`;
-    } else {
-        // Positive: black → magenta
-        const i = Math.pow(centered, 1/power);
-        return `rgb(${Math.round(i * 255)}, 0, ${Math.round(i * 255)})`;
-    }
-}
+// Raw neural signals have small amplitude - use a tighter range to show variations
+let vMin = -0.02;
+let vMax = 0.02;
 
 /**
  * Generate the magma colormap as an array of [r, g, b] values.
@@ -235,32 +207,6 @@ function emitFrame() {
 function renderNeuralData(neuralData, timeS) {
     if (!channelsCoords || !neuralData) return;
 
-    // Initialize smoothed values if needed
-    if (!smoothedValues || smoothedValues.length !== neuralData.length) {
-        smoothedValues = new Array(neuralData.length).fill(0);
-    }
-
-    // Apply EMA smoothing per channel
-    for (let i = 0; i < neuralData.length; i++) {
-        smoothedValues[i] = smoothedValues[i] * smoothingFactor + neuralData[i] * (1 - smoothingFactor);
-    }
-
-    // Update adaptive normalization
-    if (useAdaptiveNorm) {
-        // Find current max absolute value
-        let currentMax = 0;
-        for (let i = 0; i < smoothedValues.length; i++) {
-            currentMax = Math.max(currentMax, Math.abs(smoothedValues[i]));
-        }
-        // Decay running max, but jump up if we see something bigger
-        runningMax = runningMax * maxDecay;
-        if (currentMax > runningMax) {
-            runningMax = currentMax;
-        }
-        // Ensure minimum range to avoid division issues
-        runningMax = Math.max(runningMax, 0.01);
-    }
-
     // Update time
     if (timeS !== undefined) {
         currentTime = timeS;
@@ -274,19 +220,13 @@ function renderNeuralData(neuralData, timeS) {
     // Draw each channel
     for (let i = 0; i < channelsCoords.length; i++) {
         const coord = channelsCoords[i];
-        let value = smoothedValues[i];
-
-        // Apply adaptive normalization
-        if (useAdaptiveNorm) {
-            value = value / runningMax * vMax;
-        }
-
+        const value = neuralData[i];
         const pos = getChannelPosition(coord);
 
         // Draw filled circle
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, channelSize / 2, 0, Math.PI * 2);
-        ctx.fillStyle = valueToDivergingColor(value);
+        ctx.fillStyle = valueToColor(value);
         ctx.fill();
     }
 
@@ -378,10 +318,6 @@ function connect() {
                     timeBuffer = [];
                     lastFrameTime = performance.now();
 
-                    // Reset smoothing state
-                    smoothedValues = null;
-                    runningMax = 0.1;
-
                 } else if (data.type === 'sample_batch') {
                     // Accumulate samples from batch
                     const neuralData = data.neural_data;
@@ -439,22 +375,6 @@ function init() {
     document.getElementById('server-url').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             connect();
-        }
-    });
-
-    // Smoothing slider
-    const smoothingSlider = document.getElementById('smoothing-slider');
-    const smoothingValueDisplay = document.getElementById('smoothing-value');
-    smoothingSlider.addEventListener('input', (e) => {
-        smoothingFactor = parseInt(e.target.value) / 100;
-        smoothingValueDisplay.textContent = smoothingFactor.toFixed(2);
-    });
-
-    // Adaptive normalization toggle
-    document.getElementById('adaptive-toggle').addEventListener('change', (e) => {
-        useAdaptiveNorm = e.target.checked;
-        if (!useAdaptiveNorm) {
-            runningMax = 0.1; // Reset when disabled
         }
     });
 }

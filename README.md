@@ -50,6 +50,7 @@ uv run brainstorm-serve
 #works -
 uv run python scripts/serve.py
 # Open http://localhost:8000
+```
 
 The example app shows a basic heatmap. **Your solution should go far beyond this!**
 
