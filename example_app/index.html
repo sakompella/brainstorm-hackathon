@@ -28,30 +28,14 @@
         <main>
             <div class="canvas-container">
                 <canvas id="neural-canvas"></canvas>
-                <div class="colorbar">
-                    <div class="colorbar-gradient"></div>
-                    <div class="colorbar-labels">
-                        <span id="colorbar-max">+0.3</span>
-                        <span id="colorbar-zero">0.0</span>
-                        <span id="colorbar-min">-0.3</span>
-                    </div>
-                </div>
             </div>
         </main>
 
         <footer>
             <div class="controls">
                 <label for="server-url">Server URL:</label>
-                <input type="text" id="server-url" value="ws://localhost:8000/ws">
+                <input type="text" id="server-url" value="ws://localhost:8765">
                 <button id="connect-btn">Connect</button>
-            </div>
-            <div class="controls" style="margin-top: 12px;">
-                <label for="smoothing-slider">Smoothing:</label>
-                <input type="range" id="smoothing-slider" min="0" max="99" value="85" style="width: 150px;">
-                <span id="smoothing-value">0.85</span>
-                <label for="adaptive-toggle" style="margin-left: 20px;">
-                    <input type="checkbox" id="adaptive-toggle" checked> Adaptive
-                </label>
             </div>
         </footer>
     </div>
