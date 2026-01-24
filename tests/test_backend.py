@@ -354,7 +354,7 @@ class TestConsumeUpstream:
         with patch("scripts.backend.websockets.connect", return_value=mock_context):
             await consume_upstream("ws://test:8765", state, process=True, max_retries=1)
 
-        assert state.ema is not None
+        assert state.ema_state is not None
         assert state.last_activity is not None
         assert len(state.last_activity) == 1024
         assert state.total_samples == 1

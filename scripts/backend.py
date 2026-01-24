@@ -43,7 +43,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from scripts.signal_processing import ActivityEMA, compute_presence
+from scripts.signal_processing import (
+    EMAState,
+    compute_presence,
+    create_ema_state,
+    ema_activity,
+    update_ema,
+)
 
 logger = logging.getLogger("brainstorm.backend")
 
@@ -66,10 +72,12 @@ class SharedState:
     message_queue: asyncio.Queue[str] | None = None
     browser_connections: set[WebSocket] = field(default_factory=set)
 
-    ema: ActivityEMA | None = None
+    ema_state: EMAState | None = None
     last_activity: np.ndarray | None = None
     last_t: float = 0.0
     total_samples: int = 0
+
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class BrowserServer:
@@ -107,6 +115,9 @@ class BrowserServer:
             self.connections.discard(ws)
             logger.warning("Removed disconnected client during broadcast")
 
+        if disconnected:
+            self.state.browser_connections = self.connections
+
 
 async def consume_upstream(
     upstream_url: str,
@@ -137,7 +148,12 @@ async def consume_upstream(
                 logger.info("Connected to upstream ✅")
 
                 async for msg in ws:
-                    data = json.loads(msg)
+                    try:
+                        data = json.loads(msg)
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Skipping malformed JSON message: {e}")
+                        continue
+
                     msg_type = data.get("type")
 
                     if msg_type == "init":
@@ -156,21 +172,21 @@ async def consume_upstream(
 
                         if process:
                             n_ch = state.grid_size**2
-                            state.ema = ActivityEMA(
+                            state.ema_state = create_ema_state(
                                 n_ch=n_ch,
                                 fs=state.fs,
                                 tau_fast_s=tau_fast_s,
                                 tau_base_s=tau_base_s,
                             )
                             logger.info(
-                                f"Initialized ActivityEMA: n_ch={n_ch}, "
+                                f"Initialized EMA state: n_ch={n_ch}, "
                                 f"tau_fast={tau_fast_s}s, tau_base={tau_base_s}s"
                             )
 
                     elif msg_type == "sample_batch" and process:
-                        if state.ema is None:
+                        if state.ema_state is None:
                             n_ch = state.grid_size**2
-                            state.ema = ActivityEMA(
+                            state.ema_state = create_ema_state(
                                 n_ch=n_ch,
                                 fs=state.fs,
                                 tau_fast_s=tau_fast_s,
@@ -183,19 +199,25 @@ async def consume_upstream(
                         fs = float(data.get("fs", state.fs))
 
                         batch = np.asarray(batch_samples, dtype=np.float32)
-                        state.ema.update_batch(batch)
+                        state.ema_state = update_ema(state.ema_state, batch)
 
                         last_t = start_time_s + (sample_count - 1) / fs
-                        state.last_activity = state.ema.activity().copy()
-                        state.last_t = last_t
-                        state.total_samples += sample_count
+                        activity_snapshot = ema_activity(state.ema_state)
+
+                        async with state.lock:
+                            state.last_activity = activity_snapshot
+                            state.last_t = last_t
+                            state.total_samples += sample_count
 
                     if (
                         not process
                         and state.message_queue is not None
                         and isinstance(msg, str)
                     ):
-                        await state.message_queue.put(msg)
+                        try:
+                            state.message_queue.put_nowait(msg)
+                        except asyncio.QueueFull:
+                            logger.warning("Message queue full, dropping message")
 
         except websockets.exceptions.ConnectionClosedError as e:
             logger.warning(f"Upstream connection closed: {e}")
@@ -253,10 +275,11 @@ async def publish_features(
         try:
             t0 = time.perf_counter()
 
-            activity = state.last_activity
-            t = state.last_t
-            connected = state.connected_to_upstream
-            total_samples = state.total_samples
+            async with state.lock:
+                activity = state.last_activity
+                t = state.last_t
+                connected = state.connected_to_upstream
+                total_samples = state.total_samples
 
             if activity is not None and t != last_sent_t:
                 presence = compute_presence(activity)
