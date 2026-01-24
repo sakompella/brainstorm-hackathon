@@ -593,7 +593,7 @@ function connect() {
                     const centroid = data.centroid;
                     if (heatmap && heatmap.length > 0) {
                         const dataSize = heatmap.length;
-                        const nChannels = 96 * 96;
+                        const nChannels = 32 * 32;
                         document.getElementById('channel-count').textContent = `${nChannels} channels (${dataSize}x${dataSize} data)`;
 
                         // Update info cards first to get coverage
