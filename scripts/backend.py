@@ -151,7 +151,13 @@ async def consume_upstream(
     while retries < max_retries:
         try:
             logger.info(f"Connecting to upstream {upstream_url}...")
-            async with websockets.connect(upstream_url, max_queue=64) as ws:
+            async with websockets.connect(
+                upstream_url,
+                max_queue=64,
+                ping_interval=None,  # Disable keepalive pings (matches middleware)
+                ping_timeout=None,   # Disable ping timeout
+                close_timeout=60.0,   # Allow graceful shutdown
+            ) as ws:
                 state.connected_to_upstream = True
                 state.connection_attempts = retries + 1
                 retries = 0
