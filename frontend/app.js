@@ -358,10 +358,24 @@ function updateInfoCards(data) {
     const presenceCard = document.querySelector('.card-coverage .card-body');
     presenceCard.textContent = `Presence: ${presence.toFixed(3)}`;
 
-    // Update confidence
+    // Update system status
     const confidence = data.confidence || 0;
     const statusCard = document.querySelector('.card-status .card-body');
-    statusCard.textContent = confidence > 0.5 ? 'Online' : 'Offline';
+
+    const totalChannels = data.n_ch || 0;
+    const nBad = data.n_bad_channels || 0;
+    console.log(nBad);
+    
+    const badIndices = data.bad_channels_indices || [];
+    console.log(badIndices);
+
+    const statusText = `
+        ${confidence > 0.5 ? 'Online' : 'Offline'}
+        | Total Channels: ${totalChannels}
+        | Bad Channels: ${nBad}
+        ${nBad > 0 ? `(${badIndices.join(', ')})` : ''}
+    `;
+    statusCard.textContent = statusText.trim();
 }
 
 /**

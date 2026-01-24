@@ -300,7 +300,8 @@ async def publish_features(
                     "centroid": result["centroid"].tolist(),
                     "presence": float(result["presence"]),
                     "confidence": confidence,
-                    "bad_channels": result["bad_channels"],
+                    "n_bad_channels": result["n_bad_channels"],
+                    "bad_channels_indices": result["bad_channels_indices"],
                     "total_samples": int(total_samples),
                 }
                 # orjson is 5-10x faster than stdlib json (decode to str for JS compatibility)

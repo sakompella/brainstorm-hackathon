@@ -16,6 +16,7 @@ from typing import TypedDict
 import numpy as np
 from scipy.ndimage import gaussian_filter
 from scipy.signal import butter, iirnotch, sosfilt, sosfilt_zi, tf2sos
+import sys
 
 
 class ProcessingSettings(TypedDict):
@@ -33,6 +34,7 @@ DIFFICULTY_SETTINGS: dict[str, ProcessingSettings] = {
         "bad_channel_detection": False,
         "spatial_sigma": 0.0,
         "ema_alpha": 0.3,
+        "bad_channel_seconds": 5.0,
     },
     "easy": {
         "notch_60hz": False,
@@ -40,6 +42,7 @@ DIFFICULTY_SETTINGS: dict[str, ProcessingSettings] = {
         "bad_channel_detection": False,
         "spatial_sigma": 0.5,
         "ema_alpha": 0.2,
+        "bad_channel_seconds": 5.0,
     },
     "medium": {
         "notch_60hz": True,
@@ -47,6 +50,7 @@ DIFFICULTY_SETTINGS: dict[str, ProcessingSettings] = {
         "bad_channel_detection": True,
         "spatial_sigma": 1.0,
         "ema_alpha": 0.15,
+        "bad_channel_seconds": 5.0,
     },
     "hard": {
         "notch_60hz": True,
@@ -54,6 +58,7 @@ DIFFICULTY_SETTINGS: dict[str, ProcessingSettings] = {
         "bad_channel_detection": True,
         "spatial_sigma": 1.5,
         "ema_alpha": 0.1,
+        "bad_channel_seconds": 5.0,
     },
 }
 
@@ -67,30 +72,43 @@ class BadChannelInfo:
 
 
 class BadChannelDetector:
-    """Detect dead, artifact, and saturated channels."""
+    """Looser bad-channel detection with conservative thresholds."""
 
-    def __init__(self, dead_thresh: float = 1e-8, artifact_mult: float = 50):
-        self.dead_thresh = dead_thresh
-        self.artifact_mult = artifact_mult
+    def __init__(self, dead_frac: float = 0.002, artifact_z: float = 5.0, saturated_frac: float = 0.998):
+        """
+        Args:
+            dead_frac: channels with variance < dead_frac * median variance are dead
+            artifact_z: channels with variance z-score > artifact_z are artifacts
+            saturated_frac: channels with fraction of samples near min/max > saturated_frac are saturated
+        """
+        self.dead_frac = dead_frac
+        self.artifact_z = artifact_z
+        self.saturated_frac = saturated_frac
 
     def detect(self, data_buffer: np.ndarray) -> tuple[np.ndarray, BadChannelInfo]:
-        """Detect bad channels from data buffer.
-
-        Args:
-            data_buffer: (n_samples, n_channels) array
-
-        Returns:
-            bad_mask: boolean array (n_channels,)
-            info: BadChannelInfo with details
-        """
+        n_samples, n_channels = data_buffer.shape
         variance = np.var(data_buffer, axis=0)
         median_var = np.median(variance)
+        mean_var = np.mean(variance)
+        std_var = np.std(variance) + 1e-12
 
-        dead = variance < self.dead_thresh
-        artifact = variance > median_var * self.artifact_mult
-        ranges = np.ptp(data_buffer, axis=0)
-        saturated = ranges < self.dead_thresh
+        # Dead channels: very low variance relative to median
+        dead = variance < self.dead_frac * median_var
 
+        # Artifact/noisy channels: variance too high compared to population
+        var_z = (variance - mean_var) / std_var
+        artifact = var_z > self.artifact_z
+
+        # Saturated channels: almost all samples near min or max
+        ptp = np.ptp(data_buffer, axis=0)
+        saturated = ptp < 1e-6  # extremely flat channels
+        saturated_frac_mask = np.logical_or(
+            np.mean(data_buffer <= data_buffer.min(axis=0, keepdims=True) + 1e-6, axis=0) > self.saturated_frac,
+            np.mean(data_buffer >= data_buffer.max(axis=0, keepdims=True) - 1e-6, axis=0) > self.saturated_frac,
+        )
+        saturated = np.logical_or(saturated, saturated_frac_mask)
+
+        # Combine all criteria
         bad_mask = dead | artifact | saturated
 
         return bad_mask, BadChannelInfo(
@@ -100,6 +118,35 @@ class BadChannelDetector:
             variance=variance,
         )
 
+# class BadChannelDetector:
+#     """Bad-channel detection based on high-gamma power and artifacts."""
+
+#     def __init__(self, low_power_percentile: float = 2.0, artifact_z: float = 5.0):
+#         self.low_power_percentile = low_power_percentile
+#         self.artifact_z = artifact_z
+
+#     def detect(self, filtered: np.ndarray) -> tuple[np.ndarray, BadChannelInfo]:
+#         # filtered: (n_samples, n_channels)
+#         power = np.mean(filtered**2, axis=0)
+#         median_power = np.median(power)
+#         mean_power = np.mean(power)
+#         std_power = np.std(power) + 1e-12
+
+#         # Low-power channels
+#         low_power_mask = power < np.percentile(power, self.low_power_percentile)
+
+#         # Artifact/noisy channels: too high power
+#         power_z = (power - mean_power) / std_power
+#         artifact = power_z > self.artifact_z
+
+#         bad_mask = np.logical_or(low_power_mask, artifact)
+
+#         return bad_mask, BadChannelInfo(
+#             dead=np.where(low_power_mask)[0],
+#             artifact=np.where(artifact)[0],
+#             saturated=np.array([], dtype=int),
+#             variance=np.var(filtered, axis=0),
+#         )
 
 class SignalFilter:
     """Streaming-compatible signal filter with state.
@@ -301,7 +348,7 @@ class NeuralProcessor:
         self.fs = fs
         self.grid_size = grid_size
         self.settings = settings or DIFFICULTY_SETTINGS["hard"]
-        self.stateless = stateless  # If True, no EMA/accumulation - just per-frame processing
+        self.stateless = stateless
 
         self.bad_detector = BadChannelDetector()
         self.signal_filter = SignalFilter(
@@ -309,113 +356,79 @@ class NeuralProcessor:
             use_notch=self.settings["notch_60hz"],
             use_bandpass=self.settings["bandpass"],
         )
-        # Fast alpha from settings, slow baseline alpha ~20x slower
         self.power_extractor = PowerExtractor(
             alpha_fast=self.settings["ema_alpha"],
             alpha_base=self.settings["ema_alpha"] / 20,
         )
 
         self.bad_mask: np.ndarray | None = None
+        self.bad_mask_ready: bool = False  # <-- new flag
         self.init_buffer: list[np.ndarray] = []
-        self.init_samples_needed = int(1.0 * fs)  # 1 second
+        self.init_samples_needed = int(self.settings.get("bad_channel_seconds", 5.0) * fs)
+  # <-- 20 seconds for detection
         self.do_bad_detection = self.settings["bad_channel_detection"]
 
-        # Accumulator for stable centroid tracking (disabled in stateless mode)
         self.accumulated: np.ndarray | None = None
         self.accumulator_decay = 0.7
         self.accumulator_weight = 0.1
 
-        # Light temporal smoothing for stateless mode (fast EMA, no baseline)
         self.smoothed_power: np.ndarray | None = None
-        self.smooth_alpha = 0.15  # Higher = more responsive, lower = smoother
+        self.smooth_alpha = 0.15
+
 
     def process_batch(self, neural_data: np.ndarray) -> dict | None:
-        """Process a batch of neural data.
-
-        Args:
-            neural_data: (batch_size, n_channels) array
-
-        Returns:
-            dict with heatmap, centroid, presence, etc. or None if still initializing
-        """
         chunk = np.asarray(neural_data, dtype=np.float32)
         if chunk.ndim == 1:
             chunk = chunk.reshape(1, -1)
 
         n_channels = chunk.shape[1]
 
-        # Bad channel detection phase
-        if self.bad_mask is None:
-            if self.do_bad_detection:
-                self.init_buffer.append(chunk)
-                total_samples = sum(c.shape[0] for c in self.init_buffer)
-
-                if total_samples >= self.init_samples_needed:
-                    all_data = np.vstack(self.init_buffer)
-                    self.bad_mask, _info = self.bad_detector.detect(all_data)
-                    self.init_buffer = []
-                else:
-                    return None
-            else:
-                self.bad_mask = np.zeros(n_channels, dtype=bool)
-
-        # Filter
+        # Filter data
         filtered = self.signal_filter.process(chunk)
+        power = np.mean(filtered**2, axis=0)
 
-        if self.stateless:
-            # Stateless mode: instantaneous power with light temporal smoothing
-            power = np.mean(filtered**2, axis=0)
-
-            # Apply light EMA to reduce frame-to-frame jitter
-            if self.smoothed_power is None:
-                self.smoothed_power = power.copy()
-            else:
-                self.smoothed_power = (
-                    self.smooth_alpha * power
-                    + (1 - self.smooth_alpha) * self.smoothed_power
-                )
-
-            grid = to_grid(
-                self.smoothed_power,
-                self.bad_mask,
-                sigma=self.settings["spatial_sigma"],
-                grid_size=self.grid_size,
-            )
-            centroid = weighted_centroid(grid, threshold_percentile=50)
-            presence = compute_presence(self.smoothed_power)
+        # Light EMA smoothing for heatmap
+        if self.smoothed_power is None:
+            self.smoothed_power = power.copy()
         else:
-            # Stateful mode: EMA + accumulation for stable tracking
-            power, normalized = self.power_extractor.process(filtered)
+            self.smoothed_power = self.smooth_alpha * power + (1 - self.smooth_alpha) * self.smoothed_power
 
-            grid = to_grid(
-                normalized,
-                self.bad_mask,
-                sigma=self.settings["spatial_sigma"],
-                grid_size=self.grid_size,
-            )
+        # Generate heatmap immediately (even before bad channels ready)
+        grid = to_grid(
+            self.smoothed_power,
+            bad_mask=self.bad_mask if self.bad_mask_ready else None,
+            sigma=self.settings["spatial_sigma"],
+            grid_size=self.grid_size,
+        )
 
-            # Update accumulator for stable tracking (use positive part for centroid)
-            if self.accumulated is None:
-                self.accumulated = np.zeros_like(grid)
+        # Centroid + presence
+        centroid = weighted_centroid(grid, threshold_percentile=50)
+        presence = compute_presence(self.smoothed_power)
 
-            grid_positive = np.maximum(grid, 0)
-            max_val = np.percentile(grid_positive, 99) + 1e-10
-            grid_norm = np.clip(grid_positive / max_val, 0, 1)
-            self.accumulated = (
-                self.accumulator_decay * self.accumulated
-                + self.accumulator_weight * grid_norm
-            )
+        # --- Deferred bad-channel detection ---
+        if self.do_bad_detection and not self.bad_mask_ready:
+            self.init_buffer.append(chunk)
+            total_samples = sum(c.shape[0] for c in self.init_buffer)
 
-            centroid = weighted_centroid(self.accumulated, threshold_percentile=50)
-            presence = compute_presence(power)
+            if total_samples >= self.init_samples_needed:
+                all_data = np.vstack(self.init_buffer)
+                self.bad_mask, _info = self.bad_detector.detect(all_data)
+                self.bad_mask_ready = True
+                self.init_buffer = []
+
+                print("=== BAD CHANNEL READY ===", file=sys.stderr)
+                print("Number of bad channels:", self.bad_mask.sum(), file=sys.stderr)
+                print("Bad channel indices:", np.where(self.bad_mask)[0].tolist(), file=sys.stderr)
+                print("=========================", file=sys.stderr)
+                sys.stderr.flush()
 
         return {
             "heatmap": grid,
             "centroid": centroid,
             "presence": presence,
-            "bad_channels": int(self.bad_mask.sum())
-            if self.bad_mask is not None
-            else 0,
+            "n_bad_channels": int(self.bad_mask.sum()) if self.bad_mask_ready else 0,
+            "bad_channels_indices": np.where(self.bad_mask)[0].tolist() if self.bad_mask_ready else [],
+            "bad_ready": self.bad_mask_ready,
         }
 
 
