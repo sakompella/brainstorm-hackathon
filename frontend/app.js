@@ -205,7 +205,7 @@ function resizeTimeSeriesCanvas() {
 /**
  * Render heatmap.
  */
-function renderHeatmap(heatmap, centroid) {
+function renderHeatmap(heatmap, centroid, coverage) {
     if (!heatmap || !ctx) return;
 
     const rows = heatmap.length;
@@ -271,9 +271,22 @@ function renderHeatmap(heatmap, centroid) {
     }
     ctx.stroke();
 
+    // Check if we should use green (good alignment)
+    let isAligned = false;
+    if (centroid) {
+        const [cy, cx] = centroid;
+        const arrayCenter = [rows / 2, cols / 2];
+        const vecX = cx - arrayCenter[1];
+        const vecY = cy - arrayCenter[0];
+        const mag = Math.sqrt(vecX ** 2 + vecY ** 2);
+        const coverageValue = (coverage || 0) * 100;
+        // Arrow is "small" if magnitude is less than 3 grid units AND coverage > 70%
+        isAligned = mag < 3 && coverageValue > 70;
+    }
+
     // Draw border around heatmap
-    ctx.strokeStyle = 'rgba(89, 224, 255, 0.5)';
-    ctx.lineWidth = 4;
+    ctx.strokeStyle = isAligned ? 'rgba(76, 222, 128, 0.8)' : 'rgba(89, 224, 255, 0.5)';
+    ctx.lineWidth = isAligned ? 12 : 4;
     ctx.strokeRect(
         padding + offsetX,
         padding + offsetY,
@@ -289,8 +302,8 @@ function renderHeatmap(heatmap, centroid) {
         const centerX = canvasWidth / 2;
         const centerY = canvasHeight / 2;
         
-        ctx.strokeStyle = 'cyan';
-        ctx.lineWidth = 4;
+        ctx.strokeStyle = isAligned ? 'rgba(76, 222, 128, 0.9)' : 'cyan';
+        ctx.lineWidth = isAligned ? 12 : 4;
         ctx.beginPath();
         ctx.arc(
             centerX,
@@ -414,8 +427,28 @@ function updateStatus(status, text) {
 function updateInfoCards(data) {
     // Update center indicator (1 = centered, 0 = corner)
     const center = data.center_distance || 0;
+    const coveragePercent = center * 100;
     const centerCard = document.querySelector('.card-coverage .card-body');
-    centerCard.textContent = `Coverage: ${(center * 100).toFixed(1)}%`;
+    const coverageCard = document.querySelector('.card-coverage');
+    
+    if (centerCard) {
+        centerCard.textContent = `Coverage: ${coveragePercent.toFixed(1)}%`;
+        
+        // Check if we should show green (good alignment)
+        if (coveragePercent > 70) {
+            centerCard.style.color = '#4ade80';
+            if (coverageCard) {
+                coverageCard.style.borderColor = 'rgba(76, 222, 128, 0.6)';
+            }
+        } else {
+            centerCard.style.color = '';
+            if (coverageCard) {
+                coverageCard.style.borderColor = '';
+            }
+        }
+    }
+    
+    return center;
 }
 
 /**
@@ -563,11 +596,11 @@ function connect() {
                         const nChannels = 96 * 96;
                         document.getElementById('channel-count').textContent = `${nChannels} channels (${dataSize}x${dataSize} data)`;
 
-                        // Render heatmap
-                        renderHeatmap(heatmap, centroid);
+                        // Update info cards first to get coverage
+                        const coverage = updateInfoCards(data);
 
-                        // Update info cards
-                        updateInfoCards(data);
+                        // Render heatmap with coverage data
+                        renderHeatmap(heatmap, centroid, coverage);
                         
                         // Calculate mean bandpower for time series
                         let sum = 0;
