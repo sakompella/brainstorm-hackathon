@@ -8,7 +8,7 @@ class Config:
 
     # Signal processing params
     band_hz: tuple[float, float] = (70.0, 150.0)
-    filter_order: int = 4
+    filter_order: int = 2
     tau_fast_s: float = 0.25
     tau_base_s: float = 8.0
 

@@ -79,9 +79,6 @@ async def consume_raw_stream(cfg: Config, state: SharedState, lock: asyncio.Lock
                         grid = int(np.sqrt(vec.shape[0]))
                         heatmap = vec.reshape(grid, grid)
 
-                        if cfg.spatial_sigma > 0:
-                            heatmap = gaussian_filter(heatmap, sigma=cfg.spatial_sigma)
-
                         async with lock:
                             state.last_heatmap = heatmap.astype(np.float32)
                             state.last_t = last_t
@@ -111,6 +108,8 @@ async def publish_features(server: FeatureServer, cfg: Config, state: SharedStat
             fs = state.fs
 
         if heatmap is not None and t != last_sent_t:
+            if cfg.spatial_sigma > 0:
+                    heatmap = gaussian_filter(heatmap, sigma=cfg.spatial_sigma)
             peak = float(np.max(heatmap))
             med = float(np.median(heatmap))
             presence = peak - med
