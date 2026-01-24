@@ -162,6 +162,31 @@ main {
     letter-spacing: 0.02em;
 }
 
+#coverage-display {
+    font-size: 48px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+#coverage-title {
+    font-size: 24px;
+    font-weight: 400;
+    letter-spacing: 0.02em;
+}
+
+#high-gamma-title {
+    font-size: 24px;
+    font-weight: 400;
+    letter-spacing: 0.02em;
+}
+
+#move-title {
+    font-size: 24px;
+    font-weight: 400;
+    letter-spacing: 0.02em;
+}
+
+
 .card-move h2,
 .card-move .card-body {
     color: #ffffff;
