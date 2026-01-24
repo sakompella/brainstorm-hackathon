@@ -1,5 +1,7 @@
 import asyncio
+
 import websockets
+
 
 class FeatureServer:
     def __init__(self, host: str, port: int):

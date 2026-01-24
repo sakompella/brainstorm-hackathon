@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+
 @dataclass(frozen=True)
 class Config:
     input_url: str = "ws://localhost:8765"
@@ -21,5 +22,5 @@ class Config:
     # WebSocket stability
     max_queue: int = 2
     ping_interval: float | None = None  # disable pings
-    ping_timeout: float | None = None   # disable timeout
+    ping_timeout: float | None = None  # disable timeout
     close_timeout: float = 5.0

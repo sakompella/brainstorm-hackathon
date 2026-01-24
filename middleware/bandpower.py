@@ -1,11 +1,13 @@
 import numpy as np
 from scipy.signal import butter, sosfilt, sosfilt_zi
 
+
 class BandpowerEMA:
     """
     Streaming-safe bandpower:
       raw -> causal bandpass (sosfilt with state) -> power (x^2) -> EMA fast/base
     """
+
     def __init__(
         self,
         n_ch: int,
@@ -29,8 +31,8 @@ class BandpowerEMA:
         )
 
         # SciPy expects zi shape (n_sections, 2, n_ch) for axis=0 with (B, n_ch)
-        zi0 = sosfilt_zi(self.sos).astype(np.float32)          # (n_sections, 2)
-        self.zi = np.repeat(zi0[:, :, None], n_ch, axis=2)     # (n_sections, 2, n_ch)
+        zi0 = sosfilt_zi(self.sos).astype(np.float32)  # (n_sections, 2)
+        self.zi = np.repeat(zi0[:, :, None], n_ch, axis=2)  # (n_sections, 2, n_ch)
 
         dt = 1.0 / fs
         self.a_fast = float(dt / tau_fast_s)
@@ -48,4 +50,6 @@ class BandpowerEMA:
             self.p_base = (1.0 - self.a_base) * self.p_base + self.a_base * x2
 
     def normalized_vec(self) -> np.ndarray:
-        return (np.log(self.p_fast + 1e-12) - np.log(self.p_base + 1e-12)).astype(np.float32)
+        return (np.log(self.p_fast + 1e-12) - np.log(self.p_base + 1e-12)).astype(
+            np.float32
+        )

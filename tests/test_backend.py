@@ -352,11 +352,20 @@ class TestConsumeUpstream:
         mock_context.__aexit__.return_value = None
 
         with patch("scripts.backend.websockets.connect", return_value=mock_context):
-            await consume_upstream("ws://test:8765", state, process=True, max_retries=1)
+            # Use super_easy to skip bad channel detection (which requires 500 samples)
+            await consume_upstream(
+                "ws://test:8765",
+                state,
+                process=True,
+                difficulty="super_easy",
+                max_retries=1,
+            )
 
-        assert state.ema_state is not None
-        assert state.last_activity is not None
-        assert len(state.last_activity) == 1024
+        # NeuralProcessor replaces legacy EMA API
+        assert state.processor is not None
+        assert state.last_result is not None
+        assert "heatmap" in state.last_result
+        assert state.last_result["heatmap"].shape == (32, 32)
         assert state.total_samples == 1
         assert state.message_queue.empty()
 

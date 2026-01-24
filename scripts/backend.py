@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import orjson
 import typer
 import uvicorn
 import websockets
@@ -44,11 +45,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from scripts.signal_processing import (
-    EMAState,
-    compute_presence,
-    create_ema_state,
-    ema_activity,
-    update_ema,
+    DIFFICULTY_SETTINGS,
+    NeuralProcessor,
 )
 
 logger = logging.getLogger("brainstorm.backend")
@@ -72,8 +70,8 @@ class SharedState:
     message_queue: asyncio.Queue[str] | None = None
     browser_connections: set[WebSocket] = field(default_factory=set)
 
-    ema_state: EMAState | None = None
-    last_activity: np.ndarray | None = None
+    processor: NeuralProcessor | None = None
+    last_result: dict | None = None
     last_t: float = 0.0
     total_samples: int = 0
 
@@ -99,32 +97,43 @@ class BrowserServer:
         self.state.browser_connections = self.connections
         logger.info(f"Browser disconnected. Total clients: {len(self.connections)}")
 
-    async def broadcast(self, message: str) -> None:
-        """Send message to all connected browsers."""
+    async def broadcast(self, message: str | bytes) -> None:
+        """Send message to all connected browsers using parallel gather."""
         if not self.connections:
             return
 
-        disconnected: list[WebSocket] = []
-        for ws in list(self.connections):
+        async def send_safe(ws: WebSocket) -> WebSocket | None:
             try:
-                await ws.send_text(message)
+                if isinstance(message, bytes):
+                    await ws.send_bytes(message)
+                else:
+                    await ws.send_text(message)
+                return None
             except Exception:
-                disconnected.append(ws)
+                return ws
 
-        for ws in disconnected:
-            self.connections.discard(ws)
-            logger.warning("Removed disconnected client during broadcast")
+        results = await asyncio.gather(
+            *(send_safe(ws) for ws in self.connections),
+            return_exceptions=True,
+        )
 
+        # send_safe returns None on success, WebSocket on failure (filter out exceptions)
+        disconnected = [
+            r for r in results if r is not None and not isinstance(r, BaseException)
+        ]
         if disconnected:
+            for ws in disconnected:
+                self.connections.discard(ws)  # type: ignore[arg-type]
             self.state.browser_connections = self.connections
+            logger.warning(f"Removed {len(disconnected)} disconnected client(s)")
 
 
 async def consume_upstream(
     upstream_url: str,
     state: SharedState,
     process: bool = True,
-    tau_fast_s: float = 0.2,
-    tau_base_s: float = 8.0,
+    difficulty: str = "hard",
+    stateless: bool = False,
     max_retries: int = 5,
     retry_delay: float = 0.5,
 ) -> None:
@@ -132,11 +141,12 @@ async def consume_upstream(
     Connect as WebSocket client to stream_data.py.
 
     - Parse init message and cache it
-    - If process=True: compute ActivityEMA and store features in state
+    - If process=True: use NeuralProcessor with full pipeline
     - If process=False: forward raw messages to queue
     - Reconnect on failure (max retries with fixed delay)
     """
     retries = 0
+    settings = DIFFICULTY_SETTINGS.get(difficulty, DIFFICULTY_SETTINGS["hard"])
 
     while retries < max_retries:
         try:
@@ -145,7 +155,7 @@ async def consume_upstream(
                 state.connected_to_upstream = True
                 state.connection_attempts = retries + 1
                 retries = 0
-                logger.info("Connected to upstream ✅")
+                logger.info("Connected to upstream")
 
                 async for msg in ws:
                     try:
@@ -171,26 +181,24 @@ async def consume_upstream(
                         )
 
                         if process:
-                            n_ch = state.grid_size**2
-                            state.ema_state = create_ema_state(
-                                n_ch=n_ch,
+                            state.processor = NeuralProcessor(
                                 fs=state.fs,
-                                tau_fast_s=tau_fast_s,
-                                tau_base_s=tau_base_s,
+                                settings=settings,
+                                grid_size=state.grid_size,
+                                stateless=stateless,
                             )
                             logger.info(
-                                f"Initialized EMA state: n_ch={n_ch}, "
-                                f"tau_fast={tau_fast_s}s, tau_base={tau_base_s}s"
+                                f"Initialized NeuralProcessor: difficulty={difficulty}, "
+                                f"stateless={stateless}, notch={settings['notch_60hz']}, bandpass={settings['bandpass']}"
                             )
 
                     elif msg_type == "sample_batch" and process:
-                        if state.ema_state is None:
-                            n_ch = state.grid_size**2
-                            state.ema_state = create_ema_state(
-                                n_ch=n_ch,
+                        if state.processor is None:
+                            state.processor = NeuralProcessor(
                                 fs=state.fs,
-                                tau_fast_s=tau_fast_s,
-                                tau_base_s=tau_base_s,
+                                settings=settings,
+                                grid_size=state.grid_size,
+                                stateless=stateless,
                             )
 
                         batch_samples = data["neural_data"]
@@ -199,13 +207,12 @@ async def consume_upstream(
                         fs = float(data.get("fs", state.fs))
 
                         batch = np.asarray(batch_samples, dtype=np.float32)
-                        state.ema_state = update_ema(state.ema_state, batch)
+                        result = state.processor.process_batch(batch)
 
                         last_t = start_time_s + (sample_count - 1) / fs
-                        activity_snapshot = ema_activity(state.ema_state)
 
                         async with state.lock:
-                            state.last_activity = activity_snapshot
+                            state.last_result = result
                             state.last_t = last_t
                             state.total_samples += sample_count
 
@@ -276,13 +283,12 @@ async def publish_features(
             t0 = time.perf_counter()
 
             async with state.lock:
-                activity = state.last_activity
+                result = state.last_result
                 t = state.last_t
                 connected = state.connected_to_upstream
                 total_samples = state.total_samples
 
-            if activity is not None and t != last_sent_t:
-                presence = compute_presence(activity)
+            if result is not None and t != last_sent_t:
                 confidence = 1.0 if connected else 0.0
 
                 payload = {
@@ -290,12 +296,15 @@ async def publish_features(
                     "t": float(t),
                     "fs": float(state.fs),
                     "n_ch": state.grid_size**2,
-                    "activity": activity.tolist(),
-                    "presence": presence,
+                    "heatmap": result["heatmap"].tolist(),
+                    "centroid": result["centroid"].tolist(),
+                    "presence": float(result["presence"]),
                     "confidence": confidence,
+                    "bad_channels": result["bad_channels"],
                     "total_samples": int(total_samples),
                 }
-                await server.broadcast(json.dumps(payload))
+                # orjson is 5-10x faster than stdlib json (decode to str for JS compatibility)
+                await server.broadcast(orjson.dumps(payload).decode())
                 last_sent_t = t
 
             dt = time.perf_counter() - t0
@@ -398,22 +407,23 @@ def main(
     process: bool = typer.Option(
         True,
         "--process/--no-process",
-        help="Enable signal processing (ActivityEMA). Disable for raw passthrough.",
+        help="Enable signal processing. Disable for raw passthrough.",
     ),
-    tau_fast: float = typer.Option(
-        0.2,
-        "--tau-fast",
-        help="Fast EMA time constant in seconds",
-    ),
-    tau_base: float = typer.Option(
-        8.0,
-        "--tau-base",
-        help="Base EMA time constant in seconds",
+    difficulty: str = typer.Option(
+        "hard",
+        "--difficulty",
+        "-d",
+        help="Difficulty preset (super_easy, easy, medium, hard)",
     ),
     out_hz: float = typer.Option(
         20.0,
         "--out-hz",
         help="Feature broadcast rate in Hz (when processing enabled)",
+    ),
+    stateless: bool = typer.Option(
+        True,
+        "--stateless/--stateful",
+        help="Stateless mode: per-frame power (default). Stateful: EMA + accumulation.",
     ),
     log_level: str = typer.Option(
         "INFO",
@@ -454,8 +464,11 @@ def main(
         f"Signal processing: {'enabled' if process else 'disabled (passthrough)'}"
     )
     if process:
+        settings = DIFFICULTY_SETTINGS.get(difficulty, DIFFICULTY_SETTINGS["hard"])
+        logger.info(f"Difficulty: {difficulty}, stateless={stateless}")
         logger.info(
-            f"EMA params: tau_fast={tau_fast}s, tau_base={tau_base}s, out_hz={out_hz}Hz"
+            f"Settings: notch={settings['notch_60hz']}, bandpass={settings['bandpass']}, "
+            f"bad_ch={settings['bad_channel_detection']}, sigma={settings['spatial_sigma']}"
         )
 
     state = SharedState()
@@ -479,8 +492,8 @@ def main(
                 upstream_url,
                 state,
                 process=process,
-                tau_fast_s=tau_fast,
-                tau_base_s=tau_base,
+                difficulty=difficulty,
+                stateless=stateless,
             ),
             name="upstream_consumer",
         )

@@ -12,7 +12,9 @@ from .featureserver import FeatureServer
 from .state import SharedState
 
 
-async def consume_raw_stream(cfg: Config, state: SharedState, lock: asyncio.Lock) -> None:
+async def consume_raw_stream(
+    cfg: Config, state: SharedState, lock: asyncio.Lock
+) -> None:
     estimator: BandpowerEMA | None = None
 
     while True:
@@ -93,7 +95,9 @@ async def consume_raw_stream(cfg: Config, state: SharedState, lock: asyncio.Lock
             await asyncio.sleep(0.5)
 
 
-async def publish_features(server: FeatureServer, cfg: Config, state: SharedState, lock: asyncio.Lock) -> None:
+async def publish_features(
+    server: FeatureServer, cfg: Config, state: SharedState, lock: asyncio.Lock
+) -> None:
     period = 1.0 / cfg.out_hz
     last_sent_t = -1.0
 
@@ -109,7 +113,7 @@ async def publish_features(server: FeatureServer, cfg: Config, state: SharedStat
 
         if heatmap is not None and t != last_sent_t:
             if cfg.spatial_sigma > 0:
-                    heatmap = gaussian_filter(heatmap, sigma=cfg.spatial_sigma)
+                heatmap = gaussian_filter(heatmap, sigma=cfg.spatial_sigma)
             peak = float(np.max(heatmap))
             med = float(np.median(heatmap))
             presence = peak - med
