@@ -1,8 +1,7 @@
 /**
- * Neural Data Viewer - WebSocket Client
+ * Neural Data Viewer - WebSocket Client (Middleware Mode)
  *
- * Connects to a WebSocket server streaming neural data and renders
- * the activity as a scatter plot with magma colormap.
+ * Connects to middleware feature server and renders bandpower heatmaps
  */
 
 // Theme colormap (256 values, RGB)
@@ -10,7 +9,6 @@ const MAGMA_COLORMAP = generateMagmaColormap();
 
 // State
 let ws = null;
-let channelsCoords = null;
 let gridSize = 32;
 let isConnected = false;
 
@@ -22,27 +20,18 @@ let currentFps = 0;
 // Time tracking
 let currentTime = 0.0;
 
-// Sample accumulation for frame rate reduction
-let sampleBuffer = [];
-let timeBuffer = [];
-let targetFps = 30.0;
-let frameInterval = 1000.0 / targetFps; // milliseconds
-let lastFrameTime = 0.0;
-
 // Canvas and rendering
 let canvas = null;
 let ctx = null;
 let canvasWidth = 32;
 let canvasHeight = 32;
-let channelSize = 14;
 
-// Value range for colormap
-// Raw neural signals have small amplitude - use a tighter range to show variations
-let vMin = -0.02;
-let vMax = 0.02;
+// Value range for colormap (log-normalized bandpower)
+let vMin = -2.0;
+let vMax = 2.0;
 
 /**
- * Resize canvas to 1/3 of its container.
+ * Resize canvas to fit container.
  */
 function resizeCanvasToContainer() {
     if (!canvas) return;
@@ -73,7 +62,6 @@ function resizeCanvasToContainer() {
  * Generate the magma colormap as an array of [r, g, b] values.
  */
 function generateMagmaColormap() {
-    // Magma colormap data points (sampled)
     const magmaData = [
         [0.001462, 0.000466, 0.013866],
         [0.013708, 0.011771, 0.068667],
@@ -122,7 +110,6 @@ function generateMagmaColormap() {
         [0.987053, 0.991438, 0.749504]
     ];
 
-    // Interpolate to 256 values
     const colormap = [];
     for (let i = 0; i < 256; i++) {
         const t = i / 255 * (magmaData.length - 1);
@@ -174,116 +161,48 @@ function valueToColor(value) {
 function initCanvas() {
     canvas = document.getElementById('neural-canvas');
     ctx = canvas.getContext('2d');
-
     resizeCanvasToContainer();
-
-    // Draw grid even before data arrives
-    drawGridOverlay();
 }
 
 /**
- * Draw 32x32 grid overlay.
+ * Render heatmap from middleware features.
  */
-function drawGridOverlay() {
-    if (!ctx) return;
+function renderHeatmap(heatmap) {
+    if (!heatmap || !ctx) return;
 
     const size = Math.min(canvasWidth, canvasHeight);
     const padding = Math.max(4, Math.floor(size * 0.04));
     const plotSize = Math.max(1, size - 2 * padding);
-    const cellSize = plotSize / (gridSize - 1);
-    const gridStart = padding;
-    const gridEnd = padding + plotSize;
-
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let i = 0; i < gridSize; i++) {
-        const offset = gridStart + i * cellSize;
-        ctx.moveTo(offset, gridStart);
-        ctx.lineTo(offset, gridEnd);
-        ctx.moveTo(gridStart, offset);
-        ctx.lineTo(gridEnd, offset);
-    }
-    ctx.stroke();
-    ctx.restore();
-}
-
-/**
- * Calculate channel positions on canvas.
- */
-function getChannelPosition(coord) {
-    const padding = 30;
-    const plotSize = Math.min(canvasWidth, canvasHeight) - 2 * padding;
-
-    // coords are 1-indexed, convert to 0-indexed
-    const x = (coord[0] - 1) / (gridSize - 1) * plotSize + padding;
-    const y = (coord[1] - 1) / (gridSize - 1) * plotSize + padding;
-
-    return { x, y };
-}
-
-/**
- * Average accumulated samples and emit a frame.
- */
-function emitFrame() {
-    if (sampleBuffer.length === 0) return;
-
-    // Average all samples in buffer
-    const nChannels = sampleBuffer[0].length;
-    const averagedData = new Array(nChannels).fill(0);
-
-    for (let i = 0; i < sampleBuffer.length; i++) {
-        for (let j = 0; j < nChannels; j++) {
-            averagedData[j] += sampleBuffer[i][j];
-        }
-    }
-
-    for (let j = 0; j < nChannels; j++) {
-        averagedData[j] /= sampleBuffer.length;
-    }
-
-    // Use the last timestamp
-    const frameTime = timeBuffer.length > 0 ? timeBuffer[timeBuffer.length - 1] : 0.0;
-
-    // Clear buffers
-    sampleBuffer = [];
-    timeBuffer = [];
-
-    // Render the averaged frame
-    renderNeuralData(averagedData, frameTime);
-}
-
-/**
- * Render neural data on canvas.
- */
-function renderNeuralData(neuralData, timeS) {
-    if (!channelsCoords || !neuralData) return;
-
-    // Update time
-    if (timeS !== undefined) {
-        currentTime = timeS;
-        document.getElementById('time-display').textContent = `t = ${currentTime.toFixed(2)}s`;
-    }
+    const cellSize = plotSize / gridSize;
 
     // Clear canvas
     ctx.fillStyle = '#0a0a0f';
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-    drawGridOverlay();
+    // Draw heatmap
+    for (let row = 0; row < gridSize; row++) {
+        for (let col = 0; col < gridSize; col++) {
+            const value = heatmap[row][col];
+            const x = padding + col * cellSize;
+            const y = padding + row * cellSize;
 
-    // Draw each channel
-    for (let i = 0; i < channelsCoords.length; i++) {
-        const coord = channelsCoords[i];
-        const value = neuralData[i];
-        const pos = getChannelPosition(coord);
-
-        // Draw filled circle
-        ctx.beginPath();
-        ctx.arc(pos.x, pos.y, channelSize / 2, 0, Math.PI * 2);
-        ctx.fillStyle = valueToColor(value);
-        ctx.fill();
+            ctx.fillStyle = valueToColor(value);
+            ctx.fillRect(x, y, cellSize, cellSize);
+        }
     }
+
+    // Draw grid overlay
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i <= gridSize; i++) {
+        const offset = padding + i * cellSize;
+        ctx.moveTo(offset, padding);
+        ctx.lineTo(offset, padding + plotSize);
+        ctx.moveTo(padding, offset);
+        ctx.lineTo(padding + plotSize, offset);
+    }
+    ctx.stroke();
 
     // Update FPS counter
     frameCount++;
@@ -332,6 +251,26 @@ function updateStatus(status, text) {
 }
 
 /**
+ * Update info cards with feature data.
+ */
+function updateInfoCards(data) {
+    // Update presence indicator
+    const presence = data.presence || 0;
+    const presenceCard = document.querySelector('.card-coverage .card-body');
+    presenceCard.textContent = `Presence: ${presence.toFixed(3)}`;
+
+    // Update confidence
+    const confidence = data.confidence || 0;
+    const statusCard = document.querySelector('.card-status .card-body');
+    statusCard.textContent = confidence > 0.5 ? 'Online' : 'Offline';
+
+    // Update band info
+    const band = data.band || [70, 150];
+    const monitorBody = document.querySelector('.monitor-body');
+    monitorBody.textContent = `Bandpower: ${band[0]}-${band[1]} Hz | Samples: ${data.total_samples || 0}`;
+}
+
+/**
  * Connect to WebSocket server.
  */
 function connect() {
@@ -348,7 +287,7 @@ function connect() {
         ws = new WebSocket(url);
 
         ws.onopen = () => {
-            console.log('WebSocket connected');
+            console.log('WebSocket connected to middleware');
             updateStatus('connected');
         };
 
@@ -356,43 +295,23 @@ function connect() {
             try {
                 const data = JSON.parse(event.data);
 
-                if (data.type === 'init') {
-                    // Store channel coordinates and grid size
-                    channelsCoords = data.channels_coords;
-                    gridSize = data.grid_size;
+                if (data.type === 'features') {
+                    // Update time display
+                    currentTime = data.t || 0;
+                    document.getElementById('time-display').textContent = `t = ${currentTime.toFixed(2)}s`;
 
-                    document.getElementById('channel-count').textContent =
-                        `${channelsCoords.length} channels`;
-                    console.log(`Initialized with ${channelsCoords.length} channels, grid size ${gridSize}`);
+                    // Update channel count (grid size from heatmap)
+                    const heatmap = data.heatmap;
+                    if (heatmap && heatmap.length > 0) {
+                        gridSize = heatmap.length;
+                        const nChannels = gridSize * gridSize;
+                        document.getElementById('channel-count').textContent = `${nChannels} channels`;
 
-                    // Adjust channel size based on grid
-                    channelSize = Math.max(8, Math.floor(500 / gridSize));
+                        // Render heatmap
+                        renderHeatmap(heatmap);
 
-                    // Clear buffers on init
-                    sampleBuffer = [];
-                    timeBuffer = [];
-                    lastFrameTime = performance.now();
-
-                } else if (data.type === 'sample_batch') {
-                    // Accumulate samples from batch
-                    const neuralData = data.neural_data;
-                    const startTimeS = data.start_time_s || 0.0;
-                    const sampleCount = data.sample_count || neuralData.length;
-                    const fs = data.fs || 500.0;
-                    const dt = 1.0 / fs;
-
-                    // Add each sample to buffer
-                    for (let i = 0; i < sampleCount; i++) {
-                        const sampleTime = startTimeS + i * dt;
-                        sampleBuffer.push(neuralData[i]);
-                        timeBuffer.push(sampleTime);
-                    }
-
-                    // Check if it's time to emit a frame
-                    const currentTime = performance.now();
-                    if (currentTime - lastFrameTime >= frameInterval) {
-                        emitFrame();
-                        lastFrameTime = currentTime;
+                        // Update info cards
+                        updateInfoCards(data);
                     }
                 }
             } catch (err) {
@@ -423,11 +342,6 @@ function connect() {
 function init() {
     initCanvas();
     window.addEventListener('resize', resizeCanvasToContainer);
-    window.addEventListener('resize', drawGridOverlay);
-    requestAnimationFrame(() => {
-        resizeCanvasToContainer();
-        drawGridOverlay();
-    });
 
     // Connect button handler
     document.getElementById('connect-btn').addEventListener('click', connect);
