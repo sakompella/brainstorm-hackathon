@@ -309,6 +309,35 @@ async def publish_features(
                     "bad_channels": result["bad_channels"],
                     "total_samples": int(total_samples),
                 }
+
+                # Add drift tracking data if available
+                drift = result.get("drift_tracking")
+                if drift is not None:
+                    payload["drift_tracking"] = {
+                        "elastic_lasso": {
+                            "centroid": drift["elastic_lasso"]["centroid"],
+                            "area": drift["elastic_lasso"]["area"],
+                            "boundary_mask": drift["elastic_lasso"]["boundary_mask"].tolist(),
+                        },
+                        "convex_hull": {
+                            "centroid": drift["convex_hull"]["centroid"],
+                            "hull_vertices": drift["convex_hull"]["hull_vertices"],
+                            "n_persistent_peaks": drift["convex_hull"]["n_persistent_peaks"],
+                        },
+                        "bounding_box": {
+                            "centroid": drift["bounding_box"]["centroid"],
+                            "box": drift["bounding_box"]["box"],
+                        },
+                        "sliding_template": {
+                            "centroid": drift["sliding_template"]["centroid"],
+                        },
+                        "adaptive_gaussian": {
+                            "centroid": drift["adaptive_gaussian"]["centroid"],
+                            "shape_mask": drift["adaptive_gaussian"]["shape_mask"].tolist(),
+                            "shape_area": drift["adaptive_gaussian"]["shape_area"],
+                        },
+                    }
+
                 # orjson is 5-10x faster than stdlib json (decode to str for JS compatibility)
                 await server.broadcast(orjson.dumps(payload).decode())
                 last_sent_t = t
