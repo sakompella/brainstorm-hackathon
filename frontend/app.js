@@ -415,9 +415,7 @@ function updateInfoCards(data) {
     // Update center indicator (1 = centered, 0 = corner)
     const center = data.center_distance || 0;
     const centerCard = document.querySelector('.card-coverage .card-body');
-    if (centerCard) {
-        centerCard.textContent = `Coverage: ${(center * 100).toFixed(1)}%`;
-    }
+    centerCard.textContent = `Coverage: ${(center * 100).toFixed(1)}%`;
 }
 
 /**
