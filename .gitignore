@@ -50,4 +50,7 @@ data/
 .DS_Store
 Thumbs.db
 
+# Node
+node_modules/
+
 # UV - uv.lock should be committed for reproducibility

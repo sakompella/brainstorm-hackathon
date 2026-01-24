@@ -20,6 +20,6 @@ class Config:
 
     # WebSocket stability
     max_queue: int = 2
-    ping_interval: float = 20.0
-    ping_timeout: float = 60.0
+    ping_interval: float | None = None  # disable pings
+    ping_timeout: float | None = None   # disable timeout
     close_timeout: float = 5.0
