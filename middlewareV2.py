@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Middleware: Raw voltage -> per-channel "activity strength" (EMA power)
+Combined Middleware (Hackathon-ready):
+Raw voltage stream -> bandpower heatmap (baseline-normalized) -> WS for frontend
 
 IN:
   ws://localhost:8765  (brainstorm-stream)
@@ -9,13 +10,14 @@ IN:
     - type="sample_batch" with neural_data: [ [1024 floats], ... ]
 
 OUT:
-  ws://localhost:8787  (your processed feature stream)
+  ws://localhost:8787
   messages:
     - type="features"
-      activity: [1024 floats]  # RMS-ish activity per channel
-      t: float                # latest time (seconds)
-      presence: float         # simple global activity indicator (debug)
-      confidence: float       # placeholder in Phase 1
+      heatmap: [[32x32 floats]]   # baseline-normalized, spatially smoothed
+      t: float                    # latest stream time (seconds)
+      presence: float             # simple "hotspot present" scalar
+      confidence: float           # placeholder (Phase 3 will improve)
+      band: [low_hz, high_hz]     # which band we're using
 """
 
 import asyncio
@@ -25,55 +27,81 @@ from dataclasses import dataclass
 
 import numpy as np
 import websockets
+from scipy.ndimage import gaussian_filter
+from scipy.signal import butter, sosfilt, sosfilt_zi
+
 
 # ---------------------------
-# Phase 1: activity estimator
+# Bandpower + EMA estimator
 # ---------------------------
 
-
-class ActivityEMA:
+class BandpowerEMA:
     """
-    Maintains a fast and slow EMA of signal power (x^2) per channel.
-    Phase 1 output = sqrt(fast_power)  (an RMS-ish activity level).
+    Streaming-safe bandpower:
+      raw -> causal bandpass (sosfilt with state) -> power (x^2) -> EMA fast/base
     """
 
     def __init__(
         self,
         n_ch: int,
         fs: float,
-        tau_fast_s: float = 0.2,
+        band_hz: tuple[float, float] = (70.0, 150.0),  # high-gamma-ish
+        filter_order: int = 4,
+        tau_fast_s: float = 0.25,
         tau_base_s: float = 8.0,
     ):
+        self.n_ch = n_ch
+        self.fs = fs
+        self.band_hz = band_hz
+
+        # Design bandpass filter (streaming / causal)
+        low, high = band_hz
+        self.sos = butter(
+            filter_order,
+            [low, high],
+            btype="bandpass",
+            fs=fs,
+            output="sos",
+        )
+
+        # Initialize filter state for ALL channels.
+        # sosfilt expects zi shape: (n_sections, ..., 2) where ... matches signal dims excluding axis.
+        zi0 = sosfilt_zi(self.sos)  # (n_sections, 2)
+        self.zi = np.repeat(zi0[:, :, None], n_ch, axis=2).astype(np.float32)  # (n_sections, 2, n_ch)
+
+        # EMA parameters
         dt = 1.0 / fs
-        # EMA coefficients; stable if <1 (they are, for reasonable tau)
         self.a_fast = float(dt / tau_fast_s)
         self.a_base = float(dt / tau_base_s)
 
         self.p_fast = np.zeros((n_ch,), dtype=np.float32)
         self.p_base = np.zeros((n_ch,), dtype=np.float32)
 
-    def update_batch(self, batch: np.ndarray) -> None:
+    def update_batch(self, batch_raw: np.ndarray) -> None:
         """
-        batch: (B, n_ch) float32
+        batch_raw: (B, n_ch) float32
         """
-        # batch size is typically small (e.g., 10). Loop over samples, vectorize over channels.
-        for x in batch:
-            x2 = x * x
+        # 1) Causal bandpass filter across time axis (axis=0)
+        y, self.zi = sosfilt(self.sos, batch_raw, axis=0, zi=self.zi)  # y: (B, n_ch)
+
+        # 2) Power in-band
+        y2 = y * y  # (B, n_ch)
+
+        # 3) EMA update (loop over samples, vectorized over channels)
+        for x2 in y2:
             self.p_fast = (1.0 - self.a_fast) * self.p_fast + self.a_fast * x2
             self.p_base = (1.0 - self.a_base) * self.p_base + self.a_base * x2
 
-    def activity(self) -> np.ndarray:
-        return np.sqrt(self.p_fast + 1e-12)
-
-    def normalized_activity(self) -> np.ndarray:
-        # Optional: not used in Phase 1 output, but handy for Phase 3 later
-        return np.log(self.p_fast + 1e-12) - np.log(self.p_base + 1e-12)
+    def normalized_map(self) -> np.ndarray:
+        """
+        Baseline-normalized log power ratio per channel (1024,)
+        """
+        return (np.log(self.p_fast + 1e-12) - np.log(self.p_base + 1e-12)).astype(np.float32)
 
 
 # ---------------------------
 # Shared middleware state
 # ---------------------------
-
 
 @dataclass
 class SharedState:
@@ -83,14 +111,13 @@ class SharedState:
     total_samples: int = 0
     connected_to_input: bool = False
 
-    # Latest computed features
-    last_activity: np.ndarray | None = None
+    # Latest computed feature map (32x32)
+    last_heatmap: np.ndarray | None = None
 
 
 # ---------------------------
 # WebSocket server (output)
 # ---------------------------
-
 
 class FeatureServer:
     def __init__(self, host: str, port: int):
@@ -108,7 +135,6 @@ class FeatureServer:
         await self.register(ws)
         try:
             async for _ in ws:
-                # We don't require any inbound messages; keep alive
                 pass
         except websockets.exceptions.ConnectionClosed:
             pass
@@ -126,26 +152,27 @@ class FeatureServer:
     async def run(self) -> None:
         async with websockets.serve(self.handler, self.host, self.port):
             print(f"[feature server] listening on ws://{self.host}:{self.port}")
-            await asyncio.Future()  # run forever
+            await asyncio.Future()
 
 
 # ---------------------------
 # Input stream consumer
 # ---------------------------
 
-
 async def consume_raw_stream(
     input_url: str,
     state: SharedState,
     lock: asyncio.Lock,
+    band_hz: tuple[float, float],
+    filter_order: int,
     tau_fast_s: float,
     tau_base_s: float,
+    spatial_sigma: float,
 ) -> None:
     """
-    Connect to the raw brainstorm-stream and keep updating the EMA activity.
-    Automatically reconnects on drop.
+    Connect to raw brainstorm-stream and update bandpower heatmap.
     """
-    ema: ActivityEMA | None = None
+    estimator: BandpowerEMA | None = None
 
     while True:
         try:
@@ -161,47 +188,56 @@ async def consume_raw_stream(
 
                     if msg_type == "init":
                         fs = float(data.get("fs", state.fs))
-                        n_ch = int(data.get("grid_size", 32)) ** 2  # usually 1024
+                        n_ch = int(data.get("grid_size", 32)) ** 2
                         batch_size = int(data.get("batch_size", 10))
 
                         async with lock:
                             state.fs = fs
                             state.n_ch = n_ch
 
-                        ema = ActivityEMA(
+                        estimator = BandpowerEMA(
                             n_ch=n_ch,
                             fs=fs,
+                            band_hz=band_hz,
+                            filter_order=filter_order,
                             tau_fast_s=tau_fast_s,
                             tau_base_s=tau_base_s,
                         )
-                        print(
-                            f"[input] init: fs={fs}, n_ch={n_ch}, batch_size={batch_size}"
-                        )
+                        print(f"[input] init: fs={fs}, n_ch={n_ch}, batch_size={batch_size}, band={band_hz}")
 
                     elif msg_type == "sample_batch":
-                        if ema is None:
-                            # If init didn't arrive yet, assume defaults
-                            ema = ActivityEMA(
+                        if estimator is None:
+                            estimator = BandpowerEMA(
                                 n_ch=state.n_ch,
                                 fs=state.fs,
+                                band_hz=band_hz,
+                                filter_order=filter_order,
                                 tau_fast_s=tau_fast_s,
                                 tau_base_s=tau_base_s,
                             )
 
-                        batch_samples = data["neural_data"]  # list[list[float]]
+                        batch_samples = data["neural_data"]
                         start_time_s = float(data.get("start_time_s", 0.0))
                         sample_count = int(data.get("sample_count", len(batch_samples)))
                         fs = float(data.get("fs", state.fs))
 
                         batch = np.asarray(batch_samples, dtype=np.float32)  # (B, 1024)
-                        ema.update_batch(batch)
+                        estimator.update_batch(batch)
 
-                        # time of last sample in the batch:
-                        # start_time_s is time for first sample; samples spaced 1/fs
+                        # dataset time of the last sample in batch
                         last_t = start_time_s + (sample_count - 1) / fs
 
+                        # Build 32x32 map (baseline-normalized)
+                        vec = estimator.normalized_map()  # (1024,)
+                        grid = int(np.sqrt(vec.shape[0]))  # 32
+                        heatmap = vec.reshape(grid, grid)
+
+                        # Spatial smoothing to make blobs clear
+                        if spatial_sigma > 0:
+                            heatmap = gaussian_filter(heatmap, sigma=spatial_sigma)
+
                         async with lock:
-                            state.last_activity = ema.activity().copy()
+                            state.last_heatmap = heatmap.astype(np.float32)
                             state.last_t = last_t
                             state.total_samples += sample_count
 
@@ -218,15 +254,15 @@ async def consume_raw_stream(
 # Feature publisher (output loop)
 # ---------------------------
 
-
 async def publish_features(
     server: FeatureServer,
     state: SharedState,
     lock: asyncio.Lock,
+    band_hz: tuple[float, float],
     out_hz: float = 20.0,
 ) -> None:
     """
-    Broadcast last computed activity at a fixed rate (e.g., 20 Hz).
+    Broadcast heatmap at a fixed rate (e.g., 20 Hz).
     """
     period = 1.0 / out_hz
     last_sent_t = -1.0
@@ -235,36 +271,32 @@ async def publish_features(
         t0 = time.perf_counter()
 
         async with lock:
-            activity = (
-                None if state.last_activity is None else state.last_activity.copy()
-            )
+            heatmap = None if state.last_heatmap is None else state.last_heatmap.copy()
             t = state.last_t
             connected = state.connected_to_input
             total_samples = state.total_samples
 
-        if activity is not None and t != last_sent_t:
-            # A very simple global "presence" for debugging/UI: mean of top-k channels
-            k = 50
-            topk = np.partition(activity, -k)[-k:]
-            presence = float(np.mean(topk))
+        if heatmap is not None and t != last_sent_t:
+            # Presence: peak-to-median is a decent simple detector
+            peak = float(np.max(heatmap))
+            med = float(np.median(heatmap))
+            presence = peak - med
 
-            # Placeholder confidence in Phase 1 (real confidence comes after hotspot tracking)
-            confidence = 1.0 if connected else 0.0
+            confidence = 1.0 if connected else 0.0  # Phase 3 will improve this
 
             payload = {
                 "type": "features",
                 "t": float(t),
                 "fs": float(state.fs),
-                "n_ch": int(state.n_ch),
-                "activity": activity.tolist(),  # length 1024
-                "presence": presence,
-                "confidence": confidence,
+                "heatmap": heatmap.tolist(),  # 32x32
+                "presence": float(presence),
+                "confidence": float(confidence),
+                "band": [float(band_hz[0]), float(band_hz[1])],
                 "total_samples": int(total_samples),
             }
             await server.broadcast(json.dumps(payload))
             last_sent_t = t
 
-        # sleep to maintain output rate
         dt = time.perf_counter() - t0
         sleep_s = period - dt
         if sleep_s > 0:
@@ -275,27 +307,33 @@ async def publish_features(
 # Main
 # ---------------------------
 
-
 async def main() -> None:
     input_url = "ws://localhost:8765"
     out_host = "localhost"
     out_port = 8787
 
-    # Phase 1 params
-    tau_fast_s = 0.2  # responsive smoothing
-    tau_base_s = 8.0  # slow baseline (not used yet, but computed)
+    # ---- Tunable parameters (good defaults for demo) ----
+    band_hz = (70.0, 150.0)     # high-gamma-ish
+    filter_order = 4
+    tau_fast_s = 0.25           # fast responsiveness (~250ms)
+    tau_base_s = 8.0            # baseline drift (~8s)
+    spatial_sigma = 1.0         # 0 = no blur, 1.0 is usually nice
+    out_hz = 20.0               # UI update rate
+    # -----------------------------------------------------
 
     state = SharedState()
     lock = asyncio.Lock()
-
     server = FeatureServer(out_host, out_port)
 
     await asyncio.gather(
-        server.run(),  # output server
+        server.run(),
         consume_raw_stream(
-            input_url, state, lock, tau_fast_s, tau_base_s
-        ),  # input consumer
-        publish_features(server, state, lock, out_hz=20.0),  # feature publisher
+            input_url, state, lock,
+            band_hz, filter_order,
+            tau_fast_s, tau_base_s,
+            spatial_sigma,
+        ),
+        publish_features(server, state, lock, band_hz, out_hz=out_hz),
     )
 
 
