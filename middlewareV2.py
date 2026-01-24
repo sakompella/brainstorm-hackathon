@@ -67,7 +67,7 @@ class BandpowerEMA:
         # Initialize filter state for ALL channels.
         # sosfilt expects zi shape: (n_sections, ..., 2) where ... matches signal dims excluding axis.
         zi0 = sosfilt_zi(self.sos)  # (n_sections, 2)
-        self.zi = np.repeat(zi0[:, None, :], n_ch, axis=1).astype(np.float32)  # (n_sections, n_ch, 2)
+        self.zi = np.repeat(zi0[:, :, None], n_ch, axis=2).astype(np.float32)  # (n_sections, 2, n_ch)
 
         # EMA parameters
         dt = 1.0 / fs
