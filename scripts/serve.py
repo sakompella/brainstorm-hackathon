@@ -16,7 +16,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-VIEWER_DIR = Path(__file__).parent.parent / "example_app"
+VIEWER_DIR = Path(__file__).parent.parent / "app"
 
 cli = typer.Typer(help="Neural Data Viewer Web Server")
 console = Console()
