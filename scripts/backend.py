@@ -416,7 +416,7 @@ def create_app(
 @cli.command()
 def main(
     upstream_url: str = typer.Option(
-        "ws://localhost:8765",
+        "ws://192.168.1.152:8764/stream",
         "--upstream-url",
         "-u",
         help="Upstream data stream WebSocket URL",
