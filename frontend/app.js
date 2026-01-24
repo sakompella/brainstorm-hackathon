@@ -201,13 +201,13 @@ function resizeTimeSeriesCanvas() {
 /**
  * Render heatmap.
  */
-function renderHeatmap(heatmap) {
+function renderHeatmap(heatmap, centroid) {
     if (!heatmap || !ctx) return;
 
     const rows = heatmap.length;
     const cols = heatmap[0].length;
 
-    // Auto-scale vMax based on data (smoothed EMA to avoid flicker)
+    // Auto-scale vMax based on data
     let maxVal = 0;
     for (let row = 0; row < rows; row++) {
         for (let col = 0; col < cols; col++) {
@@ -252,6 +252,56 @@ function renderHeatmap(heatmap) {
     }
     ctx.stroke();
 
+    // Draw centroid if provided
+    if (centroid) {
+        const [cy, cx] = centroid; // backend sends [y,x]
+        ctx.fillStyle = 'cyan';
+        ctx.beginPath();
+        ctx.arc(
+            padding + (cx + 0.5) * cellSize,
+            padding + (cy + 0.5) * cellSize,
+            Math.max(3, cellSize / 2),
+            0,
+            2 * Math.PI
+        );
+        ctx.fill();
+
+        // --- Compute vector from center (16,16) to centroid ---
+        const center = [16, 16];
+        let vecX = cx - center[1];
+        let vecY = cy - center[0];
+
+        // Compute magnitude
+        const mag = Math.sqrt(vecX ** 2 + vecY ** 2) || 1; // avoid div0
+        const unitX = vecX / mag;
+        const unitY = vecY / mag;
+
+        // Draw arrow from center to centroid
+        ctx.strokeStyle = 'lime';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(padding + (center[1] + 0.5) * cellSize, padding + (center[0] + 0.5) * cellSize);
+        ctx.lineTo(padding + (cx + 0.5) * cellSize, padding + (cy + 0.5) * cellSize);
+        ctx.stroke();
+
+        // --- Translate unit vector into neuro/medical directions ---
+        let direction = '';
+        if (Math.abs(unitY) < 0.3 && unitX > 0.3) direction = 'Right';
+        else if (Math.abs(unitY) < 0.3 && unitX < -0.3) direction = 'Left';
+        else if (Math.abs(unitX) < 0.3 && unitY > 0.3) direction = 'Posterior';
+        else if (Math.abs(unitX) < 0.3 && unitY < -0.3) direction = 'Anterior';
+        else if (unitX > 0 && unitY < 0) direction = 'Anterior-Right';
+        else if (unitX < 0 && unitY < 0) direction = 'Anterior-Left';
+        else if (unitX > 0 && unitY > 0) direction = 'Posterior-Right';
+        else if (unitX < 0 && unitY > 0) direction = 'Posterior-Left';
+        else direction = 'Center';
+
+        // Display direction text
+        ctx.fillStyle = 'white';
+        ctx.font = '16px monospace';
+        ctx.fillText(`Direction: ${direction}`, 10, 20);
+    }
+
     // Update FPS counter
     frameCount++;
     const now = performance.now();
@@ -262,6 +312,7 @@ function renderHeatmap(heatmap) {
         document.getElementById('fps-counter').textContent = `${currentFps} FPS`;
     }
 }
+
 
 /**
  * Update connection status UI.
@@ -452,13 +503,14 @@ function connect() {
 
                     // Update channel count (grid size from heatmap)
                     const heatmap = data.heatmap;
+                    const centroid = data.centroid;
                     if (heatmap && heatmap.length > 0) {
                         const dataSize = heatmap.length;
                         const nChannels = 96 * 96;
                         document.getElementById('channel-count').textContent = `${nChannels} channels (${dataSize}x${dataSize} data)`;
 
                         // Render heatmap
-                        renderHeatmap(heatmap);
+                        renderHeatmap(heatmap, centroid);
 
                         // Update info cards
                         updateInfoCards(data);
