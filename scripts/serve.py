@@ -42,7 +42,7 @@ app = create_app()
 
 @cli.command()
 def main(
-    port: int = typer.Option(8000, help="Web server port"),
+    port: int = typer.Option(8765, help="Web server port"),
     host: str = typer.Option("localhost", help="Host to bind to"),
 ) -> None:
     """
