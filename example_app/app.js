@@ -22,12 +22,11 @@ let currentFps = 0;
 // Time tracking
 let currentTime = 0.0;
 
-// Sample accumulation for frame rate reduction
-let sampleBuffer = [];
-let timeBuffer = [];
-let targetFps = 30.0;
-let frameInterval = 1000.0 / targetFps; // milliseconds
-let lastFrameTime = 0.0;
+// Metrics from middleware
+let currentPresence = 0.0;
+let currentConfidence = 0.0;
+let currentBand = [70.0, 150.0];
+let totalSamples = 0;
 
 // Canvas and rendering
 let canvas = null;
@@ -37,9 +36,9 @@ let canvasHeight = 32;
 let channelSize = 14;
 
 // Value range for colormap
-// Raw neural signals have small amplitude - use a tighter range to show variations
-let vMin = -0.02;
-let vMax = 0.02;
+// Processed log power ratios (baseline-normalized)
+let vMin = -2.0;  // log scale: negative = below baseline
+let vMax = 2.0;   // log scale: positive = above baseline
 
 /**
  * Resize canvas to 1/3 of its container.
@@ -224,41 +223,36 @@ function getChannelPosition(coord) {
 }
 
 /**
- * Average accumulated samples and emit a frame.
+ * Update sidebar metrics display.
  */
-function emitFrame() {
-    if (sampleBuffer.length === 0) return;
-
-    // Average all samples in buffer
-    const nChannels = sampleBuffer[0].length;
-    const averagedData = new Array(nChannels).fill(0);
-
-    for (let i = 0; i < sampleBuffer.length; i++) {
-        for (let j = 0; j < nChannels; j++) {
-            averagedData[j] += sampleBuffer[i][j];
-        }
+function updateMetrics() {
+    // Update coverage card with presence
+    const coverageCard = document.querySelector('.card-coverage .card-body');
+    if (coverageCard) {
+        const percentage = Math.min(100, Math.max(0, currentPresence * 50)); // rough scaling
+        coverageCard.textContent = `${percentage.toFixed(1)}% coverage (presence: ${currentPresence.toFixed(3)})`;
     }
 
-    for (let j = 0; j < nChannels; j++) {
-        averagedData[j] /= sampleBuffer.length;
+    // Update status card with confidence and sample count
+    const statusCard = document.querySelector('.card-status .card-body');
+    if (statusCard) {
+        const status = currentConfidence > 0.5 ? 'Online' : 'Degraded';
+        statusCard.textContent = `${status} | ${totalSamples.toLocaleString()} samples | Band: ${currentBand[0]}-${currentBand[1]} Hz`;
     }
-
-    // Use the last timestamp
-    const frameTime = timeBuffer.length > 0 ? timeBuffer[timeBuffer.length - 1] : 0.0;
-
-    // Clear buffers
-    sampleBuffer = [];
-    timeBuffer = [];
-
-    // Render the averaged frame
-    renderNeuralData(averagedData, frameTime);
 }
 
 /**
  * Render neural data on canvas.
  */
 function renderNeuralData(neuralData, timeS) {
-    if (!channelsCoords || !neuralData) return;
+    if (!neuralData) {
+        console.warn('No neural data to render');
+        return;
+    }
+    if (!channelsCoords) {
+        console.warn('Channel coordinates not initialized yet');
+        return;
+    }
 
     // Update time
     if (timeS !== undefined) {
@@ -365,35 +359,55 @@ function connect() {
                         `${channelsCoords.length} channels`;
                     console.log(`Initialized with ${channelsCoords.length} channels, grid size ${gridSize}`);
 
-                    // Adjust channel size based on grid
-                    channelSize = Math.max(8, Math.floor(500 / gridSize));
+                    // Adjust channel size based on grid (smaller circles for dense grids)
+                    channelSize = Math.max(4, Math.floor(500 / gridSize / 2.5));
 
-                    // Clear buffers on init
-                    sampleBuffer = [];
-                    timeBuffer = [];
-                    lastFrameTime = performance.now();
+                } else if (data.type === 'features') {
+                    // Processed features from middlewareV2.py
+                    const heatmap = data.heatmap;  // 32x32 array
+                    console.log('Received heatmap:', heatmap ? `${heatmap.length} rows` : 'null', 
+                                heatmap && heatmap[0] ? `${heatmap[0].length} cols` : '');
+                    console.log('Heatmap type:', Array.isArray(heatmap), 'First element type:', Array.isArray(heatmap?.[0]));
+                    
+                    const t = data.t || 0.0;
+                    const presence = data.presence || 0.0;
+                    const confidence = data.confidence || 0.0;
+                    const band = data.band || [70.0, 150.0];
+                    const samples = data.total_samples || 0;
 
-                } else if (data.type === 'sample_batch') {
-                    // Accumulate samples from batch
-                    const neuralData = data.neural_data;
-                    const startTimeS = data.start_time_s || 0.0;
-                    const sampleCount = data.sample_count || neuralData.length;
-                    const fs = data.fs || 500.0;
-                    const dt = 1.0 / fs;
-
-                    // Add each sample to buffer
-                    for (let i = 0; i < sampleCount; i++) {
-                        const sampleTime = startTimeS + i * dt;
-                        sampleBuffer.push(neuralData[i]);
-                        timeBuffer.push(sampleTime);
+                    // Initialize channel coordinates if not already set
+                    if (!channelsCoords) {
+                        // heatmap is 2D array [[...], [...], ...]
+                        gridSize = heatmap.length;  // Number of rows
+                        console.log(`Heatmap dimensions: ${heatmap.length} x ${heatmap[0]?.length || 0}`);
+                        
+                        channelsCoords = [];
+                        for (let row = 1; row <= gridSize; row++) {
+                            for (let col = 1; col <= gridSize; col++) {
+                                channelsCoords.push([row, col]);
+                            }
+                        }
+                        channelSize = Math.max(4, Math.floor(500 / gridSize / 2.5));
+                        document.getElementById('channel-count').textContent = 
+                            `${channelsCoords.length} channels`;
+                        console.log(`Auto-initialized ${channelsCoords.length} channels, grid size ${gridSize}`);
                     }
 
-                    // Check if it's time to emit a frame
-                    const currentTime = performance.now();
-                    if (currentTime - lastFrameTime >= frameInterval) {
-                        emitFrame();
-                        lastFrameTime = currentTime;
-                    }
+                    // Update global metrics
+                    currentPresence = presence;
+                    currentConfidence = confidence;
+                    currentBand = band;
+                    totalSamples = samples;
+
+                    // Flatten 2D heatmap to 1D for rendering (row-major order)
+                    const flatActivity = heatmap.flat();
+                    console.log(`Rendering ${flatActivity.length} channels, grid ${gridSize}x${gridSize}`);
+                    
+                    // Render directly (no buffering needed)
+                    renderNeuralData(flatActivity, t);
+                    
+                    // Update sidebar metrics
+                    updateMetrics();
                 }
             } catch (err) {
                 console.error('Error parsing message:', err);
