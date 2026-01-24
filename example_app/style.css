@@ -103,14 +103,14 @@ header h1 {
 main {
     flex: 1;
     display: flex;
-    justify-content: center;
+    justify-content: flex-end;
     align-items: center;
     padding: 20px 0;
 }
 
 .canvas-container {
-    display: flex;
-    gap: 20px;
+    width: 96vw;
+    height: 96vh;
     background: var(--bg-secondary);
     padding: 24px;
     border-radius: 16px;
@@ -118,6 +118,10 @@ main {
     box-shadow:
         0 4px 24px rgba(0, 0, 0, 0.4),
         inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
 }
 
 #neural-canvas {
@@ -126,34 +130,7 @@ main {
     border: 1px solid var(--border-color);
 }
 
-/* Colorbar */
-.colorbar {
-    display: flex;
-    gap: 8px;
-    padding: 8px 0;
-}
 
-.colorbar-gradient {
-    width: 16px;
-    border-radius: 4px;
-    background: linear-gradient(
-        to bottom,
-        #ff00ff 0%,
-        #220022 20%,
-        #000000 35%,
-        #000000 65%,
-        #002222 80%,
-        #00ffff 100%
-    );
-}
-
-.colorbar-labels {
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    font-size: 0.75rem;
-    color: var(--text-secondary);
-}
 
 /* Footer Controls */
 footer {

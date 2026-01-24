@@ -40,10 +40,15 @@ uv run python -m scripts.download super_easy
 uv run python -m scripts.download hard
 
 # 4. Stream data (Terminal 1)
+#doesn't work - 
 uv run brainstorm-stream --from-file data/hard/
+#works -
+uv run python scripts/stream_data.py --from-file data/easy/
 
 # 5. Run example app (Terminal 2)
 uv run brainstorm-serve
+#works -
+uv run python scripts/serve.py
 # Open http://localhost:8000
 ```
 
