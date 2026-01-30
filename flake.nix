@@ -96,9 +96,14 @@
           '';
         brainstorm-backend = brainstorm-app "brainstorm-backend";
         brainstorm-stream = brainstorm-app "brainstorm-stream";
+        all = pkgs.writeShellScriptBin "all" ''
+          REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+          exec "$REPO_ROOT/start_all.sh" "''${@:-data/medium}"
+        '';
       in {
         inherit brainstorm-backend;
         inherit brainstorm-stream;
+        inherit all;
       }
     );
 
