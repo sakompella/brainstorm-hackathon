@@ -181,15 +181,19 @@ def main() -> None:
     time.sleep(2)
 
     print("Starting backend on :8000...")
+    backend_args: list[str] = [
+        sys.executable,
+        "-m",
+        "scripts.backend",
+        "--upstream-url",
+        "ws://localhost:8765",
+    ]
+    static_dir = os.environ.get("BRAINSTORM_STATIC_DIR")
+    if static_dir:
+        backend_args.extend(["--static-dir", static_dir])
     start_process(
         "backend",
-        (
-            sys.executable,
-            "-m",
-            "scripts.backend",
-            "--upstream-url",
-            "ws://localhost:8765",
-        ),
+        tuple(backend_args),
         backend_log,
         repo_root,
         state,
