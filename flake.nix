@@ -101,15 +101,29 @@
         pkgs = nixpkgs.legacyPackages.${system};
         pythonSet = pythonSets.${system};
         venv = pythonSet.mkVirtualEnv "brainstorm-env" workspace.deps.default;
-        brainstorm-app = name:
+
+        frontend = pkgs.stdenvNoCC.mkDerivation {
+          name = "brainstorm-frontend";
+          src = ./frontend;
+          installPhase = ''
+            mkdir -p $out
+            cp -r $src/* $out/
+          '';
+        };
+        
+        brainstorm-py-app = name:
           pkgs.writeShellScriptBin "${name}" ''
             exec ${venv}/bin/${name} "$@"
           '';
-        brainstorm-backend = brainstorm-app "brainstorm-backend";
-        brainstorm-stream = brainstorm-app "brainstorm-stream";
-        brainstorm-all = brainstorm-app "brainstorm-all";
+        brainstorm-stream = brainstorm-py-app "brainstorm-stream";
+        brainstorm-backend = brainstorm-py-app "brainstorm-backend";
+
+        brainstorm-all = pkgs.writeShellScriptBin "brainstorm-all" ''
+          export BRAINSTORM_STATIC_DIR="${frontend}"
+          exec ${venv}/bin/brainstorm-all "$@"
+        '';
       in {
-        inherit brainstorm-backend brainstorm-stream brainstorm-all;
+        inherit frontend brainstorm-backend brainstorm-stream brainstorm-all;
         default = brainstorm-all;
       }
     );
