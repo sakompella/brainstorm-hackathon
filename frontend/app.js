@@ -392,7 +392,6 @@ function renderHeatmap(heatmap, centroid, coverage) {
 function updateStatus(status, text) {
     const indicator = document.getElementById('status-indicator');
     const statusText = document.getElementById('status-text');
-    const connectBtn = document.getElementById('connect-btn');
 
     indicator.className = 'status-indicator';
 
@@ -400,22 +399,15 @@ function updateStatus(status, text) {
         case 'connected':
             indicator.classList.add('connected');
             statusText.textContent = 'Connected';
-            connectBtn.textContent = 'Disconnect';
-            connectBtn.classList.add('disconnect');
-            connectBtn.disabled = false;
             isConnected = true;
             break;
         case 'connecting':
             indicator.classList.add('connecting');
             statusText.textContent = 'Connecting...';
-            connectBtn.disabled = true;
             break;
         case 'disconnected':
         default:
             statusText.textContent = text || 'Disconnected';
-            connectBtn.textContent = 'Connect';
-            connectBtn.classList.remove('disconnect');
-            connectBtn.disabled = false;
             isConnected = false;
             break;
     }
@@ -562,7 +554,7 @@ function plotTimeSeries(meanPowerDb, timestamp) {
  * Connect to WebSocket server.
  */
 function connect() {
-    const url = document.getElementById('server-url').value;
+    const url = "ws://localhost:8000/ws";
 
     if (isConnected && ws) {
         ws.close();
@@ -648,20 +640,13 @@ function connect() {
  */
 function init() {
     initCanvas();
+
     window.addEventListener('resize', () => {
         resizeCanvasToContainer();
         resizeTimeSeriesCanvas();
     });
 
-    // Connect button handler
-    document.getElementById('connect-btn').addEventListener('click', connect);
-
-    // Enter key in URL input
-    document.getElementById('server-url').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            connect();
-        }
-    });
+    connect();
 }
 
 // Start when DOM is ready

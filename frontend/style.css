@@ -279,73 +279,6 @@ main {
 
 
 
-/* Footer Controls */
-footer {
-    padding-top: 20px;
-    border-top: 1px solid var(--border-color);
-}
-
-.controls {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    justify-content: center;
-}
-
-.controls label {
-    font-size: 0.85rem;
-    color: var(--text-secondary);
-}
-
-.controls input {
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    padding: 10px 14px;
-    color: var(--text-primary);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.85rem;
-    width: 280px;
-    transition: all 0.2s ease;
-}
-
-.controls input:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 3px var(--accent-glow);
-}
-
-.controls button {
-    background: var(--accent-primary);
-    border: none;
-    border-radius: 8px;
-    padding: 10px 24px;
-    color: white;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.85rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s ease;
-}
-
-.controls button:hover {
-    background: var(--blue-primary);
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px var(--accent-glow);
-}
-
-.controls button:active {
-    transform: translateY(0);
-}
-
-.controls button.disconnect {
-    background: var(--error);
-}
-
-.controls button.disconnect:hover {
-    background: var(--error);
-}
-
 /* Responsive */
 @media (max-width: 768px) {
     .container {
@@ -356,15 +289,6 @@ footer {
         flex-direction: column;
         gap: 12px;
         align-items: flex-start;
-    }
-
-    .controls {
-        flex-direction: column;
-        gap: 8px;
-    }
-
-    .controls input {
-        width: 100%;
     }
 }
 .status-bar #time-display,
