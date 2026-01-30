@@ -49,6 +49,16 @@
       system: let
         pkgs = nixpkgs.legacyPackages.${system};
         python = pkgs.python314;
+        # Override evdev to use pre-built wheel (avoids kernel header requirement)
+        evdevOverlay = final: prev: {
+          evdev = prev.evdev.overrideAttrs (old: {
+            nativeBuildInputs = (old.nativeBuildInputs or []) ++ [final.setuptools];
+            # Point to linux headers for building
+            preBuild = (old.preBuild or "") + ''
+              export C_INCLUDE_PATH="${pkgs.linuxHeaders}/include:$C_INCLUDE_PATH"
+            '';
+          });
+        };
       in
         (pkgs.callPackage pyproject-nix.build.packages {
           inherit python;
@@ -57,6 +67,7 @@
           lib.composeManyExtensions [
             pyproject-build-systems.overlays.wheel
             overlay
+            evdevOverlay
           ]
         )
     );
