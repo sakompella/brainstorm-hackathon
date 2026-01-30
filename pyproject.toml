@@ -26,6 +26,7 @@ brainstorm-stream = "scripts.stream_data:app"
 brainstorm-serve = "scripts.serve:cli"
 brainstorm-backend = "scripts.backend:cli"
 brainstorm-control = "scripts.control_client:app"
+brainstorm-all = "scripts.launcher:main"
 
 [build-system]
 requires = ["hatchling"]
