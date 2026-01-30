@@ -5,6 +5,15 @@
 set -e
 
 DATA_DIR="${1:-data/easy}"
+DATASET_NAME=$(basename "$DATA_DIR")
+
+# Download data if not already present
+if [ ! -f "$DATA_DIR/track2_data.parquet" ]; then
+    echo "Downloading $DATASET_NAME dataset..."
+    uv run python -m scripts.download "$DATASET_NAME"
+else
+    echo "Data already present at $DATA_DIR"
+fi
 
 # Kill existing processes
 echo "Cleaning up..."
