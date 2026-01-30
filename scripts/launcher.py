@@ -2,8 +2,6 @@
 """Launcher for BrainStorm services with robust process management."""
 
 from __future__ import annotations
-import textwrap
-from textwrap import dedent
 
 import atexit
 import contextlib
@@ -11,6 +9,7 @@ import os
 import signal
 import subprocess
 import sys
+import textwrap
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -74,18 +73,27 @@ def download_data(repo_root: Path, dataset_name: str) -> None:
 def start_process(
     name: str,
     args: tuple[str, ...],
-    log_file: Path,
+    log_file: Path | None,
     cwd: Path,
     state: State,
 ) -> Process:
-    with open(log_file, "w") as log:
-        proc = subprocess.Popen(
-            args,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            cwd=cwd,
-            start_new_session=True,
-        )
+    if log_file:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = open(log_file, "w")  # noqa: SIM115
+        stdout = log_handle
+    else:
+        log_handle = None
+        stdout = None
+
+    proc = subprocess.Popen(
+        args,
+        stdout=stdout,
+        stderr=subprocess.STDOUT if stdout else None,
+        cwd=cwd,
+        start_new_session=True,
+    )
+    if log_handle:
+        log_handle.close()
     state.processes.append((name, proc))
     return proc
 
@@ -126,12 +134,17 @@ def wait_for_processes(state: State, ports: tuple[int, ...]) -> None:
         cleanup(state, ports)
 
 
+def in_container() -> bool:
+    return Path("/.dockerenv").exists() or os.environ.get("CONTAINER") is not None
+
+
 def main() -> None:
     ports = (8765, 8000)
     repo_root = find_repo_root()
     data_dir = sys.argv[1] if len(sys.argv) > 1 else "data/medium"
     data_path = repo_root / data_dir
     dataset_name = data_path.name
+    use_logs = not in_container()
 
     if not (data_path / "track2_data.parquet").exists():
         print(f"Downloading {dataset_name} dataset...")
@@ -154,11 +167,14 @@ def main() -> None:
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
+    stream_log = Path("/tmp/stream.log") if use_logs else None
+    backend_log = Path("/tmp/backend.log") if use_logs else None
+
     print(f"Starting streamer on :8765 (data: {data_dir})...")
     start_process(
         "streamer",
         (sys.executable, "-m", "scripts.stream_data", "--from-file", f"{data_path}/"),
-        Path("/tmp/stream.log"),
+        stream_log,
         repo_root,
         state,
     )
@@ -174,7 +190,7 @@ def main() -> None:
             "--upstream-url",
             "ws://localhost:8765",
         ),
-        Path("/tmp/backend.log"),
+        backend_log,
         repo_root,
         state,
     )
@@ -182,19 +198,22 @@ def main() -> None:
 
     streamer_pid = state.processes[0][1].pid
     backend_pid = state.processes[1][1].pid
-    print(textwrap.dedent(f"""
+    log_info = (
+        "\n    Logs:\n      tail -f /tmp/stream.log\n      tail -f /tmp/backend.log"
+        if use_logs
+        else ""
+    )
+    print(
+        textwrap.dedent(f"""
     Ready!
 
       Streamer:  ws://localhost:8765  (PID: {streamer_pid})
       Backend:   http://localhost:8000 (PID: {backend_pid})
 
     Open http://localhost:8000 in your browser
-
-    Logs:
-      tail -f /tmp/stream.log
-      tail -f /tmp/backend.log
-
-    To stop: Press Ctrl+C"""))
+{log_info}
+    To stop: Press Ctrl+C""")
+    )
 
     wait_for_processes(state, ports)
 
