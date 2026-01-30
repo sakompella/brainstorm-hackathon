@@ -155,8 +155,8 @@ async def consume_upstream(
                 upstream_url,
                 max_queue=64,
                 ping_interval=None,  # Disable keepalive pings (matches middleware)
-                ping_timeout=None,   # Disable ping timeout
-                close_timeout=60.0,   # Allow graceful shutdown
+                ping_timeout=None,  # Disable ping timeout
+                close_timeout=60.0,  # Allow graceful shutdown
             ) as ws:
                 state.connected_to_upstream = True
                 state.connection_attempts = retries + 1
