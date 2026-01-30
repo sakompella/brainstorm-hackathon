@@ -193,9 +193,9 @@ function resizeTimeSeriesCanvas() {
     const dpr = window.devicePixelRatio || 1;
     
     timeSeriesCanvas.width = Math.floor(rect.width * dpr);
-    timeSeriesCanvas.height = Math.floor(Math.min(200, rect.height) * dpr);
+    timeSeriesCanvas.height = Math.floor(rect.height * dpr);
     timeSeriesCanvas.style.width = `${rect.width}px`;
-    timeSeriesCanvas.style.height = `${Math.min(200, rect.height)}px`;
+    timeSeriesCanvas.style.height = `${rect.height}px`;
     
     if (timeSeriesCtx) {
         timeSeriesCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -459,9 +459,10 @@ function plotTimeSeries(meanPowerDb, timestamp) {
     
     if (timeSeriesData.length < 2) return;
     
-    const width = (timeSeriesCanvas.width / (window.devicePixelRatio || 1))-40;
-    const height = timeSeriesCanvas.height / (window.devicePixelRatio || 1);
-    const padding = { top: 20, right: 40, bottom: 30, left: 50 };
+    const dpr = window.devicePixelRatio || 1;
+    const width = timeSeriesCanvas.width / dpr;
+    const height = timeSeriesCanvas.height / dpr;
+    const padding = { top: 20, right: 20, bottom: 30, left: 50 };
     const plotWidth = width - padding.left - padding.right;
     const plotHeight = height - padding.top - padding.bottom;
     
@@ -525,7 +526,7 @@ function plotTimeSeries(meanPowerDb, timestamp) {
         // Position relative to latest time, with latest at 70% of plot width
         const timeFromLatest = latestTime - d.t;
         const normalizedPosition = 0.7 - (timeFromLatest / displayTimeRange);
-        const x = padding.left + 60 + normalizedPosition * plotWidth;
+        const x = padding.left + normalizedPosition * plotWidth;
         const y = height - padding.bottom - ((d.value - minValue) / valueRange) * plotHeight;
         
         if (i === 0) {
