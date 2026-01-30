@@ -554,7 +554,8 @@ function plotTimeSeries(meanPowerDb, timestamp) {
  * Connect to WebSocket server.
  */
 function connect() {
-    const url = "ws://localhost:8000/ws";
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${protocol}//${window.location.host}/ws`;
 
     if (isConnected && ws) {
         ws.close();
