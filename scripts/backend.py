@@ -123,7 +123,7 @@ class BrowserServer:
         ]
         if disconnected:
             for ws in disconnected:
-                self.connections.discard(ws)  # type: ignore[arg-type]
+                self.connections.discard(ws)
             self.state.browser_connections = self.connections
             logger.warning(f"Removed {len(disconnected)} disconnected client(s)")
 
