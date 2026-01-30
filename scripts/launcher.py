@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Launcher for BrainStorm services with robust process management."""
 
-from __future__ import annotations
-
 import atexit
 import contextlib
 import os
