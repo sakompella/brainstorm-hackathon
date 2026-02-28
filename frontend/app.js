@@ -222,7 +222,7 @@ function renderHeatmap(heatmap, centroid, coverage) {
 
     const size = Math.min(canvasWidth, canvasHeight);
     const padding = Math.max(4, Math.floor(size * 0.04));
-    const plotSize = Math.max(1, (size - 2 * padding) * 0.6); // Make heatmap 60% of available space
+    const plotSize = Math.max(1, (size - 2 * padding) * 0.85); // Make heatmap 85% of available space
     const cellSize = plotSize / cols;
 
     // Clear canvas
