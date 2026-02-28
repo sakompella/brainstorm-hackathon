@@ -256,7 +256,8 @@ main {
 }
 
 .sidebar .signal-monitor {
-    flex: 0 0 220px;
+    flex: 1;
+    min-height: 220px;
     display: flex;
     flex-direction: column;
     gap: 8px;
