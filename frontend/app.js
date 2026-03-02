@@ -40,6 +40,11 @@ let canvasHeight = 32;
 let vMin = 0.0;
 let vMax = 0.01;
 
+// Reconnect state
+let userRequestedDisconnect = false;
+let reconnectDelay = 1000;
+let reconnectTimer = null;
+
 /**
  * Resize canvas to fit container.
  */
@@ -211,14 +216,18 @@ function renderHeatmap(heatmap, centroid, coverage) {
     const rows = heatmap.length;
     const cols = heatmap[0].length;
 
-    // Auto-scale vMax based on data
+    // Auto-scale vMin/vMax based on data
     let maxVal = 0;
+    let minVal = Infinity;
     for (let row = 0; row < rows; row++) {
         for (let col = 0; col < cols; col++) {
-            if (heatmap[row][col] > maxVal) maxVal = heatmap[row][col];
+            const v = heatmap[row][col];
+            if (v > maxVal) maxVal = v;
+            if (v < minVal) minVal = v;
         }
     }
     vMax = 0.9 * vMax + 0.1 * Math.max(maxVal, 0.001);
+    vMin = 0.9 * vMin + 0.1 * minVal;
 
     const size = Math.min(canvasWidth, canvasHeight);
     const padding = Math.max(4, Math.floor(size * 0.04));
@@ -643,9 +652,16 @@ function connect() {
 function init() {
     initCanvas();
 
+    let resizeScheduled = false;
     window.addEventListener('resize', () => {
-        resizeCanvasToContainer();
-        resizeTimeSeriesCanvas();
+        if (!resizeScheduled) {
+            resizeScheduled = true;
+            requestAnimationFrame(() => {
+                resizeCanvasToContainer();
+                resizeTimeSeriesCanvas();
+                resizeScheduled = false;
+            });
+        }
     });
 
     connect();
