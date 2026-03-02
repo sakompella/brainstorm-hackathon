@@ -412,7 +412,7 @@ function updateStatus(status, text) {
             break;
         case 'connecting':
             indicator.classList.add('connecting');
-            statusText.textContent = 'Connecting...';
+            statusText.textContent = text || 'Connecting...';
             break;
         case 'disconnected':
         default:
@@ -568,8 +568,15 @@ function connect() {
     const url = `${protocol}//${window.location.host}/ws`;
 
     if (isConnected && ws) {
+        userRequestedDisconnect = true;
         ws.close();
         return;
+    }
+
+    userRequestedDisconnect = false;
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
     }
 
     updateStatus('connecting');
@@ -579,6 +586,7 @@ function connect() {
 
         ws.onopen = () => {
             console.log('WebSocket connected to middleware');
+            reconnectDelay = 1000;
             updateStatus('connected');
         };
 
@@ -636,8 +644,19 @@ function connect() {
 
         ws.onclose = (event) => {
             console.log('WebSocket closed:', event.code, event.reason);
-            updateStatus('disconnected', event.wasClean ? 'Disconnected' : 'Connection lost');
             ws = null;
+
+            if (userRequestedDisconnect) {
+                updateStatus('disconnected', 'Disconnected');
+                return;
+            }
+
+            updateStatus('connecting', 'Reconnecting...');
+            reconnectTimer = setTimeout(() => {
+                reconnectTimer = null;
+                connect();
+            }, reconnectDelay);
+            reconnectDelay = Math.min(reconnectDelay * 2, 10000);
         };
 
     } catch (err) {
