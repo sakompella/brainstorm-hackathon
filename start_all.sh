@@ -4,7 +4,7 @@
 
 set -e
 
-DATA_DIR="${1:-data/easy}"
+DATA_DIR="${1:-data/hard}"
 DATASET_NAME=$(basename "$DATA_DIR")
 
 # Download data if not already present
