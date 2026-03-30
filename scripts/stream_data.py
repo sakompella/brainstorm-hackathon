@@ -78,8 +78,8 @@ class FileSampleProvider:
         self.current_idx = 0
 
         # Stats tracking
-        self._recent_min = 0.0
-        self._recent_max = 0.0
+        self._recent_min = float("inf")
+        self._recent_max = float("-inf")
 
     def get_next_batch(self, batch_size: int) -> tuple[list[list[float]], float]:
         """Get next batch of samples from the file."""
