@@ -160,6 +160,96 @@ class TestCanvasRendering:
         assert d["h"] > 100, f"Heatmap height too small: {d['h']}"
 
 
+class TestReconnection:
+    """Verify WebSocket reconnection after page reload."""
+
+    def test_reconnects_after_reload(self, page: Page) -> None:
+        """After a full page reload, status should return to Connected."""
+        page.reload()
+        page.locator("#status-text").filter(has_text="Connected").wait_for(
+            timeout=10_000
+        )
+        expect(page.locator("#status-text")).to_have_text("Connected")
+
+    def test_data_resumes_after_reload(self, page: Page) -> None:
+        """After reload, time should advance (data is streaming again)."""
+        page.reload()
+        page.locator("#status-text").filter(has_text="Connected").wait_for(
+            timeout=10_000
+        )
+        t1_text = page.locator("#time-display").text_content()
+        assert t1_text is not None
+        t1 = float(t1_text.split("=")[1].strip().rstrip("s"))
+
+        page.wait_for_timeout(2_000)
+
+        t2_text = page.locator("#time-display").text_content()
+        assert t2_text is not None
+        t2 = float(t2_text.split("=")[1].strip().rstrip("s"))
+
+        assert t2 > t1, f"Time did not resume after reload: {t1} -> {t2}"
+
+
+class TestDOMCompleteness:
+    """Verify all expected elements are present in the DOM."""
+
+    EXPECTED_IDS = [
+        "status-indicator",
+        "status-text",
+        "time-display",
+        "fps-counter",
+        "channel-count",
+        "neural-canvas",
+        "timeseries-canvas",
+        "coverage-title",
+        "coverage-display",
+        "move-title",
+        "direction-display",
+        "high-gamma-title",
+    ]
+
+    def test_all_ids_present(self, page: Page) -> None:
+        for element_id in self.EXPECTED_IDS:
+            loc = page.locator(f"#{element_id}")
+            expect(loc).to_be_attached(), f"Missing element: #{element_id}"
+
+    def test_coverage_in_valid_range(self, page: Page) -> None:
+        """Coverage percentage should be between 0 and 100."""
+        page.wait_for_timeout(BASE_WAIT)
+        text = page.locator("#coverage-display").text_content()
+        assert text is not None
+        value = float(text.split(":")[1].strip().rstrip("%"))
+        assert 0 <= value <= 100, f"Coverage out of range: {value}%"
+
+
+class TestCanvasUpdates:
+    """Verify canvases are actively updating (not frozen)."""
+
+    def test_heatmap_updates(self, page: Page) -> None:
+        """Heatmap should change between frames."""
+        page.wait_for_timeout(BASE_WAIT)
+        data1 = page.evaluate(
+            "document.getElementById('neural-canvas').toDataURL()"
+        )
+        page.wait_for_timeout(2_000)
+        data2 = page.evaluate(
+            "document.getElementById('neural-canvas').toDataURL()"
+        )
+        assert data1 != data2, "Heatmap canvas did not update between frames"
+
+    def test_timeseries_updates(self, page: Page) -> None:
+        """Time series should change as new data arrives."""
+        page.wait_for_timeout(BASE_WAIT)
+        data1 = page.evaluate(
+            "document.getElementById('timeseries-canvas').toDataURL()"
+        )
+        page.wait_for_timeout(2_000)
+        data2 = page.evaluate(
+            "document.getElementById('timeseries-canvas').toDataURL()"
+        )
+        assert data1 != data2, "Timeseries canvas did not update between frames"
+
+
 class TestHealthEndpoint:
     """Verify the /health API endpoint."""
 
@@ -169,3 +259,10 @@ class TestHealthEndpoint:
         data = resp.json()
         assert data["status"] == "ok"
         assert data["upstream_connected"] is True
+
+    def test_health_reports_browser_client(self, page: Page, base_url: str) -> None:
+        """With a browser connected, browser_clients should be >= 1."""
+        resp = page.request.get(f"{base_url}/health")
+        assert resp.ok
+        data = resp.json()
+        assert data["browser_clients"] >= 1
