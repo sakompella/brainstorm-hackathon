@@ -101,16 +101,16 @@ def cleanup(state: State, ports: tuple[int, ...]) -> None:
     for name, proc in reversed(state.processes):
         if proc.poll() is None:
             print(f"Stopping {name} (PID: {proc.pid})...")
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(proc.pid, signal.SIGTERM)
+            with contextlib.suppress(ProcessLookupError, OSError):
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
 
     time.sleep(0.5)
 
     for name, proc in state.processes:
         if proc.poll() is None:
             print(f"Force killing {name} (PID: {proc.pid})...")
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(proc.pid, signal.SIGKILL)
+            with contextlib.suppress(ProcessLookupError, OSError):
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
 
     kill_ports(ports)
 
