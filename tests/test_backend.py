@@ -387,7 +387,7 @@ class TestConsumeUpstream:
 
         with patch("scripts.backend.websockets.connect", side_effect=failing_connect):
             await consume_upstream(
-                "ws://test:8765", state, max_retries=3, retry_delay=0.01
+                "ws://test:8765", state, max_retries=3, initial_retry_delay=0.01
             )
 
         assert call_count == 3

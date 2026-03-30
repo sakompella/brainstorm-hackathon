@@ -134,8 +134,9 @@ async def consume_upstream(
     process: bool = True,
     difficulty: str = "hard",
     stateless: bool = False,
-    max_retries: int = 5,
-    retry_delay: float = 0.5,
+    max_retries: int = 0,
+    initial_retry_delay: float = 0.5,
+    max_retry_delay: float = 30.0,
 ) -> None:
     """
     Connect as WebSocket client to stream_data.py.
@@ -143,12 +144,13 @@ async def consume_upstream(
     - Parse init message and cache it
     - If process=True: use NeuralProcessor with full pipeline
     - If process=False: forward raw messages to queue
-    - Reconnect on failure (max retries with fixed delay)
+    - Reconnect with exponential backoff (max_retries=0 means infinite)
     """
-    retries = 0
+    attempts = 0
+    retry_delay = initial_retry_delay
     settings = DIFFICULTY_SETTINGS.get(difficulty, DIFFICULTY_SETTINGS["hard"])
 
-    while retries < max_retries:
+    while max_retries == 0 or attempts < max_retries:
         try:
             logger.info(f"Connecting to upstream {upstream_url}...")
             async with websockets.connect(
@@ -159,8 +161,7 @@ async def consume_upstream(
                 close_timeout=60.0,  # Allow graceful shutdown
             ) as ws:
                 state.connected_to_upstream = True
-                state.connection_attempts = retries + 1
-                retries = 0
+                retry_delay = initial_retry_delay
                 logger.info("Connected to upstream")
 
                 async for msg in ws:
@@ -240,15 +241,14 @@ async def consume_upstream(
         finally:
             state.connected_to_upstream = False
 
-        retries += 1
-        if retries < max_retries:
-            logger.info(
-                f"Reconnecting to upstream in {retry_delay}s "
-                f"(attempt {retries + 1}/{max_retries})..."
-            )
+        attempts += 1
+        if max_retries == 0 or attempts < max_retries:
+            logger.info(f"Reconnecting to upstream in {retry_delay:.1f}s...")
             await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, max_retry_delay)
 
-    logger.error(f"Failed to connect to upstream after {max_retries} attempts")
+    if max_retries > 0:
+        logger.error(f"Failed to connect to upstream after {max_retries} attempts")
 
 
 async def broadcast_loop(
