@@ -197,7 +197,7 @@ class PowerExtractor:
         power_instant = filtered**2
         power = np.mean(power_instant, axis=0)
 
-        if self.p_fast is None:
+        if self.p_fast is None or self.p_base is None:
             self.p_fast = power.copy()
             self.p_base = power.copy()
         else:
@@ -247,7 +247,8 @@ def _get_coord_grids(h: int, w: int) -> tuple[np.ndarray, np.ndarray]:
     """Get cached coordinate grids to avoid allocation per call."""
     key = (h, w)
     if key not in _COORD_CACHE:
-        _COORD_CACHE[key] = np.mgrid[0:h, 0:w]
+        rows, cols = np.mgrid[0:h, 0:w]
+        _COORD_CACHE[key] = (rows, cols)
     return _COORD_CACHE[key]
 
 
