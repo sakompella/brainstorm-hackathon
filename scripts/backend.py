@@ -218,7 +218,8 @@ async def consume_upstream(
                         last_t = start_time_s + (sample_count - 1) / fs
 
                         async with state.lock:
-                            state.last_result = result
+                            if result is not None:
+                                state.last_result = result
                             state.last_t = last_t
                             state.total_samples += sample_count
 
