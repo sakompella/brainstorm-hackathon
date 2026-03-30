@@ -37,4 +37,6 @@ COPY --from=builder /tmp/nix-store-closure /nix/store
 COPY --from=builder /tmp/build/result /app
 COPY --from=builder /tmp/build/git-result /git
 ENV PATH="/git/bin:/app/bin:${PATH}"
+ENV CONTAINER=1
+EXPOSE 8000
 CMD ["/app/bin/brainstorm-all"]
