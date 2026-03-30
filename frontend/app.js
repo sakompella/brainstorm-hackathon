@@ -328,53 +328,58 @@ function renderHeatmap(heatmap, centroid, coverage) {
         let vecX = cx - arrayCenter[1];
         let vecY = cy - arrayCenter[0];
 
-        // Compute magnitude
-        const mag = Math.sqrt(vecX ** 2 + vecY ** 2) || 1; // avoid div0
-        const unitX = vecX / mag;
-        const unitY = vecY / mag;
+        // Compute magnitude (in grid units from center)
+        const mag = Math.sqrt(vecX ** 2 + vecY ** 2);
 
-        // Draw arrow from array center (with offset, so it moves) to centroid (fixed at center)
+        // Draw arrow from array center to centroid (only if centroid is far enough from center)
         const arrayCenterX = padding + (arrayCenter[1] + 0.5) * cellSize + offsetX;
         const arrayCenterY = padding + (arrayCenter[0] + 0.5) * cellSize + offsetY;
-        
-        ctx.strokeStyle = 'lime';
-        ctx.lineWidth = 6;
-        ctx.beginPath();
-        ctx.moveTo(arrayCenterX, arrayCenterY);
-        ctx.lineTo(centerX, centerY);
-        ctx.stroke();
 
-        // Draw arrowhead in the middle of the line
-        const midX = (arrayCenterX + centerX) / 2;
-        const midY = (arrayCenterY + centerY) / 2;
-        const arrowSize = 20;
-        const angle = Math.atan2(centerY - arrayCenterY, centerX - arrayCenterX);
-        
-        ctx.fillStyle = 'lime';
-        ctx.beginPath();
-        ctx.moveTo(midX, midY);
-        ctx.lineTo(
-            midX - arrowSize * Math.cos(angle - Math.PI / 6),
-            midY - arrowSize * Math.sin(angle - Math.PI / 6)
-        );
-        ctx.lineTo(
-            midX - arrowSize * Math.cos(angle + Math.PI / 6),
-            midY - arrowSize * Math.sin(angle + Math.PI / 6)
-        );
-        ctx.closePath();
-        ctx.fill();
+        // Threshold: ~1.5 grid cells from center before showing directional guidance
+        const centerThreshold = 1.5;
+        let direction = 'Center';
 
-        // --- Translate unit vector into neuro/medical directions ---
-        let direction = '';
-        if (Math.abs(unitY) < 0.3 && unitX > 0.3) direction = 'Right';
-        else if (Math.abs(unitY) < 0.3 && unitX < -0.3) direction = 'Left';
-        else if (Math.abs(unitX) < 0.3 && unitY > 0.3) direction = 'Posterior';
-        else if (Math.abs(unitX) < 0.3 && unitY < -0.3) direction = 'Anterior';
-        else if (unitX > 0 && unitY < 0) direction = 'Anterior-Right';
-        else if (unitX < 0 && unitY < 0) direction = 'Anterior-Left';
-        else if (unitX > 0 && unitY > 0) direction = 'Posterior-Right';
-        else if (unitX < 0 && unitY > 0) direction = 'Posterior-Left';
-        else direction = 'Center';
+        if (mag > centerThreshold) {
+            const unitX = vecX / mag;
+            const unitY = vecY / mag;
+
+            ctx.strokeStyle = 'lime';
+            ctx.lineWidth = 6;
+            ctx.beginPath();
+            ctx.moveTo(arrayCenterX, arrayCenterY);
+            ctx.lineTo(centerX, centerY);
+            ctx.stroke();
+
+            // Draw arrowhead in the middle of the line
+            const midX = (arrayCenterX + centerX) / 2;
+            const midY = (arrayCenterY + centerY) / 2;
+            const arrowSize = 20;
+            const angle = Math.atan2(centerY - arrayCenterY, centerX - arrayCenterX);
+
+            ctx.fillStyle = 'lime';
+            ctx.beginPath();
+            ctx.moveTo(midX, midY);
+            ctx.lineTo(
+                midX - arrowSize * Math.cos(angle - Math.PI / 6),
+                midY - arrowSize * Math.sin(angle - Math.PI / 6)
+            );
+            ctx.lineTo(
+                midX - arrowSize * Math.cos(angle + Math.PI / 6),
+                midY - arrowSize * Math.sin(angle + Math.PI / 6)
+            );
+            ctx.closePath();
+            ctx.fill();
+
+            // --- Translate unit vector into neuro/medical directions ---
+            if (Math.abs(unitY) < 0.3 && unitX > 0.3) direction = 'Right';
+            else if (Math.abs(unitY) < 0.3 && unitX < -0.3) direction = 'Left';
+            else if (Math.abs(unitX) < 0.3 && unitY > 0.3) direction = 'Posterior';
+            else if (Math.abs(unitX) < 0.3 && unitY < -0.3) direction = 'Anterior';
+            else if (unitX > 0 && unitY < 0) direction = 'Anterior-Right';
+            else if (unitX < 0 && unitY < 0) direction = 'Anterior-Left';
+            else if (unitX > 0 && unitY > 0) direction = 'Posterior-Right';
+            else if (unitX < 0 && unitY > 0) direction = 'Posterior-Left';
+        }
 
         // Update move instruction card
         const directionDisplay = document.getElementById('direction-display');
