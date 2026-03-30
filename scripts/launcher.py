@@ -11,10 +11,7 @@ import textwrap
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from types import FrameType
+from types import FrameType
 
 Process = subprocess.Popen[bytes]
 ProcessEntry = tuple[str, Process]
