@@ -40,7 +40,8 @@ RUN cp -R $(nix-store -qR result/) $(nix-store -qR git-result/) $(nix-store -qR 
 #   /app/data    - writable data directory for downloaded datasets
 RUN mkdir -p /tmp/rootfs/tmp \
              /tmp/rootfs/etc/ssl/certs \
-             /tmp/rootfs/app/data
+             /tmp/rootfs/app/data \
+             /tmp/rootfs/root
 
 # Minimal /etc/passwd: root user + nobody (some Python libs call getpwuid)
 RUN printf 'root:x:0:0:root:/root:/bin/sh\nnobody:x:65534:65534:nobody:/:/bin/false\n' \
@@ -79,6 +80,8 @@ ENV SSL_CERT_FILE="/cacert/etc/ssl/certs/ca-bundle.crt"
 ENV NIX_SSL_CERT_FILE="/cacert/etc/ssl/certs/ca-bundle.crt"
 ENV REQUESTS_CA_BUNDLE="/cacert/etc/ssl/certs/ca-bundle.crt"
 ENV CURL_CA_BUNDLE="/cacert/etc/ssl/certs/ca-bundle.crt"
+ENV HOME="/root"
+ENV HF_HOME="/tmp/hf_cache"
 ENV CONTAINER=1
 EXPOSE 8000
 # /app/data is where downloaded datasets land (repo_root falls back to cwd=/app)
