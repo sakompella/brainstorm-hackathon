@@ -27,6 +27,14 @@ test-results/
 # Docs
 docs/
 
+# Secrets / env files
+.env
+.env.*
+
+# Local tooling artifacts
+.playwright-mcp/
+.ruff_cache/
+
 # Misc
 *.log
 .DS_Store
