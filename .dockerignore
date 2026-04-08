@@ -1,0 +1,32 @@
+# Version control
+.git
+.gitignore
+
+# Data (large files, downloaded at runtime in container)
+data/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.uv/
+
+# Dev tooling
+.dispatch/
+.claude/
+.vscode/
+.idea/
+
+# Test artifacts
+.pytest_cache/
+tests/
+playwright-report/
+test-results/
+
+# Docs
+docs/
+
+# Misc
+*.log
+.DS_Store
