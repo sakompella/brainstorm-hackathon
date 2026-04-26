@@ -5,8 +5,6 @@ This server serves the static web files. Web clients connect directly
 to the data stream (stream_data.py) instead of through this server.
 """
 
-from pathlib import Path
-
 import typer
 import uvicorn
 from fastapi import FastAPI
@@ -16,7 +14,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-VIEWER_DIR = Path(__file__).parent.parent / "frontend"
+from scripts.static_assets import resolve_static_dir
+
+VIEWER_DIR = resolve_static_dir()
 
 cli = typer.Typer(help="Neural Data Viewer Web Server")
 console = Console()

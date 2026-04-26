@@ -49,6 +49,7 @@ from scripts.signal_processing import (
     DIFFICULTY_SETTINGS,
     NeuralProcessor,
 )
+from scripts.static_assets import resolve_static_dir
 
 logger = logging.getLogger("brainstorm.backend")
 
@@ -498,9 +499,7 @@ def main(
         datefmt="%H:%M:%S",
     )
 
-    static_path = Path(static_dir)
-    if not static_path.is_absolute():
-        static_path = Path.cwd() / static_path
+    static_path = resolve_static_dir(static_dir)
 
     logger.info(f"Static files directory: {static_path}")
     logger.info(f"Upstream URL: {upstream_url}")

@@ -33,12 +33,15 @@ requires = ["hatchling", "setuptools"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["scripts", "web_viewer"]
+packages = ["scripts"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"frontend" = "scripts/frontend"
 
 [tool.hatch.build]
 include = [
     "scripts/**/*.py",
-    "web_viewer/**/*",
+    "frontend/**/*",
 ]
 
 [tool.ruff]
