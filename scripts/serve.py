@@ -1,19 +1,19 @@
 """
 Web server for the Neural Data Viewer.
 
-This server serves the static web files. Web clients connect directly
-to the data stream (stream_data.py) instead of through this server.
+Legacy entrypoint that serves the frontend and bridges browser WebSocket
+connections to the upstream data stream.
 """
 
 import typer
-import uvicorn
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from scripts.backend import BrowserServer, SharedState
+from scripts.backend import create_app as create_backend_app
+from scripts.backend import main as run_backend
 from scripts.static_assets import resolve_static_dir
 
 VIEWER_DIR = resolve_static_dir()
@@ -22,19 +22,14 @@ cli = typer.Typer(help="Neural Data Viewer Web Server")
 console = Console()
 
 
-def create_app() -> FastAPI:
-    """Create the FastAPI application."""
-    app = FastAPI(title="Neural Data Viewer")
-
-    @app.get("/")
-    async def index() -> FileResponse:
-        """Serve index.html."""
-        return FileResponse(VIEWER_DIR / "index.html")
-
-    # Mount static files (must come after explicit routes)
-    app.mount("/", StaticFiles(directory=VIEWER_DIR), name="static")
-
-    return app
+def create_app(
+    state: SharedState | None = None,
+    server: BrowserServer | None = None,
+) -> FastAPI:
+    """Create the legacy FastAPI application with same-origin /ws support."""
+    app_state = state or SharedState()
+    app_server = server or BrowserServer(app_state)
+    return create_backend_app(app_state, app_server, VIEWER_DIR)
 
 
 app = create_app()
@@ -42,14 +37,20 @@ app = create_app()
 
 @cli.command()
 def main(
-    port: int = typer.Option(8765, help="Web server port"),
+    upstream_url: str = typer.Option(
+        "ws://localhost:8765",
+        "--upstream-url",
+        "-u",
+        help="Upstream data stream WebSocket URL",
+    ),
+    port: int = typer.Option(8000, help="Web server port"),
     host: str = typer.Option("localhost", help="Host to bind to"),
 ) -> None:
     """
     Start the Neural Data Viewer web server.
 
-    This server serves static files. Web clients connect directly
-    to the data stream (ws://localhost:8765) instead of through this server.
+    This legacy command serves static files and exposes /ws for the frontend,
+    forwarding data from the upstream stream_data.py server.
     """
     # Print header
     console.print()
@@ -66,8 +67,9 @@ def main(
     config_table = Table(show_header=False, box=None, padding=(0, 1))
     config_table.add_row("[dim]Web Server[/dim]", f"[cyan]http://{host}:{port}[/cyan]")
     config_table.add_row(
-        "[dim]Data Stream[/dim]", "[cyan]ws://localhost:8765[/cyan] (direct connection)"
+        "[dim]Data Stream[/dim]", f"[cyan]{upstream_url}[/cyan] (upstream)"
     )
+    config_table.add_row("[dim]Browser WS[/dim]", f"[cyan]ws://{host}:{port}/ws[/cyan]")
 
     console.print(config_table)
     console.print()
@@ -84,15 +86,20 @@ def main(
     )
     console.print()
     console.print(
-        "[dim]Note: Web clients connect directly to the data stream at ws://localhost:8765[/dim]"
+        "[dim]Note: Web clients connect to this server at /ws; this server connects upstream.[/dim]"
     )
     console.print()
 
-    uvicorn.run(
-        create_app(),
+    run_backend(
+        upstream_url=upstream_url,
         host=host,
         port=port,
-        log_level="warning",
+        static_dir=str(VIEWER_DIR),
+        process=True,
+        difficulty="hard",
+        out_hz=20.0,
+        stateless=True,
+        log_level="INFO",
     )
 
 
