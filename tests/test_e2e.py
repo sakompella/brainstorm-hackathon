@@ -10,6 +10,7 @@ Run with:
 from __future__ import annotations
 
 import re
+from typing import ClassVar
 
 import pytest
 from playwright.sync_api import Page, expect
@@ -193,7 +194,7 @@ class TestReconnection:
 class TestDOMCompleteness:
     """Verify all expected elements are present in the DOM."""
 
-    EXPECTED_IDS = [
+    EXPECTED_IDS: ClassVar[tuple[str, ...]] = (
         "status-indicator",
         "status-text",
         "time-display",
@@ -206,7 +207,7 @@ class TestDOMCompleteness:
         "move-title",
         "direction-display",
         "high-gamma-title",
-    ]
+    )
 
     def test_all_ids_present(self, page: Page) -> None:
         for element_id in self.EXPECTED_IDS:
