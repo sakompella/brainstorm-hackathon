@@ -290,9 +290,11 @@ def compute_center_distance(centroid: np.ndarray, grid_size: int = 32) -> float:
     Returns:
         centering: normalized metric 1.0 (perfectly centered) to 0.0 (corner)
     """
-    center = grid_size / 2
+    center = (grid_size - 1) / 2
     raw = np.sqrt((centroid[0] - center) ** 2 + (centroid[1] - center) ** 2)
     max_dist = np.sqrt(2) * center
+    if max_dist == 0:
+        return 1.0
     return float(1 - (raw / max_dist))
 
 
