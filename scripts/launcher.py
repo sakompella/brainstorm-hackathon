@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Launcher for BrainStorm services with robust process management."""
 
+import argparse
 import atexit
 import contextlib
 import os
@@ -15,6 +16,7 @@ from types import FrameType
 
 Process = subprocess.Popen[bytes]
 ProcessEntry = tuple[str, Process]
+DEFAULT_DATA_DIR = "data/hard"
 
 
 @dataclass(slots=True)
@@ -133,10 +135,25 @@ def in_container() -> bool:
     return Path("/.dockerenv").exists() or os.environ.get("CONTAINER") is not None
 
 
+def parse_args(argv: tuple[str, ...]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Launch the BrainStorm streamer and backend services.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "data_dir",
+        nargs="?",
+        default=DEFAULT_DATA_DIR,
+        help="Dataset directory to stream",
+    )
+    return parser.parse_args(argv)
+
+
 def main() -> None:
     ports = (8765, 8000)
     repo_root = find_repo_root()
-    data_dir = sys.argv[1] if len(sys.argv) > 1 else "data/medium"
+    args = parse_args(tuple(sys.argv[1:]))
+    data_dir = args.data_dir
     data_path = repo_root / data_dir
     dataset_name = data_path.name
     use_logs = not in_container()
