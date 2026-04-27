@@ -17,6 +17,7 @@ from scripts.backend import (
     broadcast_loop,
     consume_upstream,
     create_app,
+    run_server_tasks,
 )
 
 
@@ -433,3 +434,35 @@ class TestBroadcastLoop:
         await broadcast_loop(server, state)
 
         assert any("queue not initialized" in r.message for r in caplog.records)
+
+
+class TestRunServerTasks:
+    @pytest.mark.asyncio
+    async def test_stops_uvicorn_when_upstream_finishes_first(self) -> None:
+        class FakeUvicornServer:
+            def __init__(self) -> None:
+                self.should_exit = False
+                self.serve_finished = asyncio.Event()
+
+            async def serve(self) -> None:
+                while not self.should_exit:
+                    await asyncio.sleep(0.001)
+                self.serve_finished.set()
+
+        server = FakeUvicornServer()
+
+        async def upstream_once() -> None:
+            return
+
+        async def never_ending_output() -> None:
+            while True:
+                await asyncio.sleep(1.0)
+
+        await run_server_tasks(
+            uvicorn_server=server,
+            upstream_coro=upstream_once(),
+            output_coro=never_ending_output(),
+        )
+
+        assert server.should_exit is True
+        assert server.serve_finished.is_set()

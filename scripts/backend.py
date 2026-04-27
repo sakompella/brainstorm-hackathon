@@ -30,9 +30,10 @@ import contextlib
 import json
 import logging
 import time
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 import orjson
@@ -52,6 +53,13 @@ from scripts.signal_processing import (
 logger = logging.getLogger("brainstorm.backend")
 
 cli = typer.Typer(help="Unified Backend Server for Neural Data Viewer")
+
+
+class _ServableServer(Protocol):
+    should_exit: bool
+
+    def serve(self) -> Coroutine[Any, Any, None]:
+        ...
 
 
 @dataclass(slots=True)
@@ -327,6 +335,37 @@ async def publish_features(
             logger.error(f"Feature publish error: {e}")
 
 
+async def run_server_tasks(
+    *,
+    uvicorn_server: _ServableServer,
+    upstream_coro: Coroutine[Any, Any, None],
+    output_coro: Coroutine[Any, Any, None],
+) -> None:
+    """Run uvicorn + backend tasks and stop server when upstream finishes."""
+    serve_task = asyncio.create_task(uvicorn_server.serve())
+    upstream_task = asyncio.create_task(upstream_coro)
+    output_task = asyncio.create_task(output_coro)
+
+    done, _ = await asyncio.wait(
+        {serve_task, upstream_task, output_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+
+    if upstream_task in done:
+        await upstream_task
+        if not serve_task.done():
+            uvicorn_server.should_exit = True
+        await serve_task
+    else:
+        await serve_task
+
+    for task in (upstream_task, output_task):
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
 def create_app(
     state: SharedState,
     server: BrowserServer,
@@ -494,43 +533,27 @@ def main(
         )
         uvicorn_server = uvicorn.Server(config)
 
-        upstream_task = asyncio.create_task(
-            consume_upstream(
-                upstream_url,
-                state,
-                process=process,
-                difficulty=difficulty,
-                stateless=stateless,
-            ),
-            name="upstream_consumer",
+        upstream_coro = consume_upstream(
+            upstream_url,
+            state,
+            process=process,
+            difficulty=difficulty,
+            stateless=stateless,
         )
 
         if process:
-            output_task = asyncio.create_task(
-                publish_features(server, state, out_hz=out_hz),
-                name="feature_publisher",
-            )
+            output_coro = publish_features(server, state, out_hz=out_hz)
         else:
-            output_task = asyncio.create_task(
-                broadcast_loop(server, state),
-                name="broadcast_loop",
-            )
+            output_coro = broadcast_loop(server, state)
 
         try:
-            await asyncio.gather(
-                uvicorn_server.serve(),
-                upstream_task,
-                output_task,
+            await run_server_tasks(
+                uvicorn_server=uvicorn_server,
+                upstream_coro=upstream_coro,
+                output_coro=output_coro,
             )
         except asyncio.CancelledError:
             logger.info("Shutting down...")
-        finally:
-            upstream_task.cancel()
-            output_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await upstream_task
-            with contextlib.suppress(asyncio.CancelledError):
-                await output_task
 
     with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run_server())
