@@ -45,6 +45,13 @@ let userRequestedDisconnect = false;
 let reconnectDelay = 1000;
 let reconnectTimer = null;
 
+function stopReconnectTimer() {
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+}
+
 /**
  * Resize canvas to fit container.
  */
@@ -418,11 +425,31 @@ function updateStatus(status, text) {
         case 'connecting':
             indicator.classList.add('connecting');
             statusText.textContent = text || 'Connecting...';
+            isConnected = false;
             break;
         case 'disconnected':
         default:
             statusText.textContent = text || 'Disconnected';
             isConnected = false;
+            break;
+    }
+}
+
+function updateUpstreamStatus(data) {
+    switch (data.upstream_state) {
+        case 'connected':
+            updateStatus('connected');
+            break;
+        case 'connecting':
+            updateStatus('connecting');
+            break;
+        case 'ended':
+            updateStatus('disconnected', 'Stream ended');
+            stopReconnectTimer();
+            break;
+        case 'disconnected':
+        default:
+            updateStatus('connecting', 'Waiting for stream...');
             break;
     }
 }
@@ -579,10 +606,7 @@ function connect() {
     }
 
     userRequestedDisconnect = false;
-    if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-    }
+    stopReconnectTimer();
 
     updateStatus('connecting');
 
@@ -592,14 +616,16 @@ function connect() {
         ws.onopen = () => {
             console.log('WebSocket connected to middleware');
             reconnectDelay = 1000;
-            updateStatus('connected');
+            updateStatus('connecting', 'Waiting for stream...');
         };
 
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
 
-                if (data.type === 'features') {
+                if (data.type === 'status') {
+                    updateUpstreamStatus(data);
+                } else if (data.type === 'features') {
                     // Update time display
                     currentTime = data.t || 0;
                     document.getElementById('time-display').textContent = `t = ${currentTime.toFixed(2)}s`;

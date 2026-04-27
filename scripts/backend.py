@@ -33,7 +33,7 @@ import time
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import numpy as np
 import orjson
@@ -55,6 +55,8 @@ logger = logging.getLogger("brainstorm.backend")
 
 cli = typer.Typer(help="Unified Backend Server for Neural Data Viewer")
 
+UpstreamState = Literal["connecting", "connected", "disconnected", "ended"]
+
 
 class _ServableServer(Protocol):
     should_exit: bool
@@ -68,6 +70,7 @@ class SharedState:
     """Shared state between upstream consumer and browser server."""
 
     connected_to_upstream: bool = False
+    upstream_state: UpstreamState = "disconnected"
     connection_attempts: int = 0
 
     channels_coords: tuple[tuple[int, int], ...] | None = None
@@ -160,8 +163,10 @@ async def consume_upstream(
     settings = DIFFICULTY_SETTINGS.get(difficulty, DIFFICULTY_SETTINGS["hard"])
 
     while max_retries == 0 or attempts < max_retries:
+        clean_close = False
         try:
             logger.info(f"Connecting to upstream {upstream_url}...")
+            state.upstream_state = "connecting"
             async with websockets.connect(
                 upstream_url,
                 max_queue=64,
@@ -170,6 +175,7 @@ async def consume_upstream(
                 close_timeout=60.0,  # Allow graceful shutdown
             ) as ws:
                 state.connected_to_upstream = True
+                state.upstream_state = "connected"
                 retry_delay = initial_retry_delay
                 logger.info("Connected to upstream")
 
@@ -243,12 +249,19 @@ async def consume_upstream(
                         except asyncio.QueueFull:
                             logger.warning("Message queue full, dropping message")
 
+                clean_close = True
+
         except websockets.exceptions.ConnectionClosedError as e:
             logger.warning(f"Upstream connection closed: {e}")
         except Exception as e:
             logger.error(f"Upstream connection error: {e}")
         finally:
             state.connected_to_upstream = False
+            state.upstream_state = "ended" if clean_close else "disconnected"
+
+        if clean_close:
+            logger.info("Upstream stream ended cleanly; not reconnecting")
+            break
 
         attempts += 1
         if max_retries == 0 or attempts < max_retries:
@@ -293,6 +306,7 @@ async def publish_features(
     """
     period = 1.0 / out_hz
     last_sent_t = -1.0
+    last_sent_status: str | None = None
 
     while True:
         try:
@@ -302,7 +316,18 @@ async def publish_features(
                 result = state.last_result
                 t = state.last_t
                 connected = state.connected_to_upstream
+                upstream_state = state.upstream_state
                 total_samples = state.total_samples
+
+            if upstream_state != last_sent_status:
+                status_payload = {
+                    "type": "status",
+                    "upstream_connected": connected,
+                    "upstream_state": upstream_state,
+                    "total_samples": int(total_samples),
+                }
+                await server.broadcast(orjson.dumps(status_payload).decode())
+                last_sent_status = upstream_state
 
             if result is not None and t != last_sent_t:
                 confidence = 1.0 if connected else 0.0
@@ -390,6 +415,7 @@ def create_app(
             {
                 "status": "ok",
                 "upstream_connected": state.connected_to_upstream,
+                "upstream_state": state.upstream_state,
                 "browser_clients": len(server.connections),
             }
         )

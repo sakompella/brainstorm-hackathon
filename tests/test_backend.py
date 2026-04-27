@@ -17,6 +17,7 @@ from scripts.backend import (
     broadcast_loop,
     consume_upstream,
     create_app,
+    publish_features,
     run_server_tasks,
 )
 
@@ -393,6 +394,42 @@ class TestConsumeUpstream:
 
         assert call_count == 3
 
+    @pytest.mark.asyncio
+    async def test_clean_upstream_close_marks_stream_ended_without_retrying(self) -> None:
+        """A graceful upstream close is EOF, not a reconnect loop."""
+        state = SharedState()
+        state.message_queue = asyncio.Queue()
+
+        async def mock_message_iter():
+            yield json.dumps(
+                {
+                    "type": "init",
+                    "channels_coords": [[0, 0]],
+                    "grid_size": 1,
+                    "fs": 500.0,
+                    "batch_size": 10,
+                }
+            )
+
+        mock_ws = AsyncMock()
+        mock_ws.__aiter__ = lambda self: mock_message_iter()
+
+        mock_context = AsyncMock()
+        mock_context.__aenter__.return_value = mock_ws
+        mock_context.__aexit__.return_value = None
+
+        with patch(
+            "scripts.backend.websockets.connect", return_value=mock_context
+        ) as connect:
+            await asyncio.wait_for(
+                consume_upstream("ws://test:8765", state, max_retries=0),
+                timeout=0.5,
+            )
+
+        assert connect.call_count == 1
+        assert state.connected_to_upstream is False
+        assert state.upstream_state == "ended"
+
 
 class TestBroadcastLoop:
     """Tests for broadcast_loop function."""
@@ -435,7 +472,6 @@ class TestBroadcastLoop:
 
         assert any("queue not initialized" in r.message for r in caplog.records)
 
-
 class TestRunServerTasks:
     @pytest.mark.asyncio
     async def test_stops_uvicorn_when_upstream_finishes_first(self) -> None:
@@ -466,3 +502,35 @@ class TestRunServerTasks:
 
         assert server.should_exit is True
         assert server.serve_finished.is_set()
+
+
+class TestPublishFeatures:
+    """Tests for backend-to-browser feature/status publishing."""
+
+    @pytest.mark.asyncio
+    async def test_publishes_upstream_status_without_feature_data(self) -> None:
+        state = SharedState()
+        state.upstream_state = "ended"
+        server = BrowserServer(state)
+        server.broadcast = AsyncMock()  # type: ignore[method-assign]
+
+        task = asyncio.create_task(publish_features(server, state, out_hz=50.0))
+
+        async def wait_for_status() -> dict:
+            while server.broadcast.call_count == 0:
+                await asyncio.sleep(0.01)
+            return json.loads(server.broadcast.call_args.args[0])
+
+        try:
+            payload = await asyncio.wait_for(wait_for_status(), timeout=1.0)
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        assert payload == {
+            "type": "status",
+            "upstream_connected": False,
+            "upstream_state": "ended",
+            "total_samples": 0,
+        }
