@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from websockets.exceptions import ConnectionClosedError
+from websockets.frames import Close
 
 from scripts.backend import (
     BrowserServer,
@@ -395,7 +397,9 @@ class TestConsumeUpstream:
         assert call_count == 3
 
     @pytest.mark.asyncio
-    async def test_clean_upstream_close_marks_stream_ended_without_retrying(self) -> None:
+    async def test_clean_upstream_close_marks_stream_ended_without_retrying(
+        self,
+    ) -> None:
         """A graceful upstream close is EOF, not a reconnect loop."""
         state = SharedState()
         state.message_queue = asyncio.Queue()
@@ -429,6 +433,78 @@ class TestConsumeUpstream:
         assert connect.call_count == 1
         assert state.connected_to_upstream is False
         assert state.upstream_state == "ended"
+
+    @pytest.mark.asyncio
+    async def test_service_restart_close_marks_stream_ended_without_retrying(
+        self,
+    ) -> None:
+        """Uvicorn shutdown closes clients with 1012 after no-loop EOF."""
+        state = SharedState()
+        state.message_queue = asyncio.Queue()
+
+        async def mock_message_iter():
+            yield json.dumps(
+                {
+                    "type": "init",
+                    "channels_coords": [[0, 0]],
+                    "grid_size": 1,
+                    "fs": 500.0,
+                    "batch_size": 10,
+                }
+            )
+            raise ConnectionClosedError(Close(1012, "service restart"), None)
+
+        mock_ws = AsyncMock()
+        mock_ws.__aiter__ = lambda self: mock_message_iter()
+
+        mock_context = AsyncMock()
+        mock_context.__aenter__.return_value = mock_ws
+        mock_context.__aexit__.return_value = None
+
+        with patch(
+            "scripts.backend.websockets.connect", return_value=mock_context
+        ) as connect:
+            await asyncio.wait_for(
+                consume_upstream("ws://test:8765", state, max_retries=0),
+                timeout=0.5,
+            )
+
+        assert connect.call_count == 1
+        assert state.connected_to_upstream is False
+        assert state.upstream_state == "ended"
+
+    @pytest.mark.asyncio
+    async def test_service_restart_before_data_remains_retryable(self) -> None:
+        """A restart before any stream message is not enough evidence for EOF."""
+        state = SharedState()
+        state.message_queue = asyncio.Queue()
+
+        async def mock_message_iter():
+            raise ConnectionClosedError(Close(1012, "service restart"), None)
+            yield  # pragma: no cover
+
+        def mock_connect(*args, **kwargs):
+            mock_ws = AsyncMock()
+            mock_ws.__aiter__ = lambda self: mock_message_iter()
+
+            mock_context = AsyncMock()
+            mock_context.__aenter__.return_value = mock_ws
+            mock_context.__aexit__.return_value = None
+            return mock_context
+
+        with patch(
+            "scripts.backend.websockets.connect", side_effect=mock_connect
+        ) as connect:
+            await consume_upstream(
+                "ws://test:8765",
+                state,
+                max_retries=2,
+                initial_retry_delay=0.01,
+            )
+
+        assert connect.call_count == 2
+        assert state.connected_to_upstream is False
+        assert state.upstream_state == "disconnected"
 
 
 class TestBroadcastLoop:

@@ -56,6 +56,7 @@ logger = logging.getLogger("brainstorm.backend")
 cli = typer.Typer(help="Unified Backend Server for Neural Data Viewer")
 
 UpstreamState = Literal["connecting", "connected", "disconnected", "ended"]
+SERVICE_RESTART_CLOSE_CODE = 1012
 
 
 class _ServableServer(Protocol):
@@ -140,6 +141,15 @@ class BrowserServer:
             logger.warning(f"Removed {len(disconnected)} disconnected client(s)")
 
 
+def is_terminal_upstream_close(
+    exc: websockets.exceptions.ConnectionClosedError,
+    saw_message: bool,
+) -> bool:
+    """Return whether an upstream close represents finite playback ending."""
+    close_code = exc.rcvd.code if exc.rcvd is not None else None
+    return saw_message and close_code == SERVICE_RESTART_CLOSE_CODE
+
+
 async def consume_upstream(
     upstream_url: str,
     state: SharedState,
@@ -164,6 +174,7 @@ async def consume_upstream(
 
     while max_retries == 0 or attempts < max_retries:
         clean_close = False
+        saw_message = False
         try:
             logger.info(f"Connecting to upstream {upstream_url}...")
             state.upstream_state = "connecting"
@@ -180,6 +191,7 @@ async def consume_upstream(
                 logger.info("Connected to upstream")
 
                 async for msg in ws:
+                    saw_message = True
                     try:
                         data = json.loads(msg)
                     except json.JSONDecodeError as e:
@@ -253,6 +265,7 @@ async def consume_upstream(
 
         except websockets.exceptions.ConnectionClosedError as e:
             logger.warning(f"Upstream connection closed: {e}")
+            clean_close = is_terminal_upstream_close(e, saw_message)
         except Exception as e:
             logger.error(f"Upstream connection error: {e}")
         finally:
