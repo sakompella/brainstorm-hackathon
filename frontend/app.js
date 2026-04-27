@@ -42,6 +42,7 @@ let vMax = 0.01;
 
 // Reconnect state
 let userRequestedDisconnect = false;
+let streamEnded = false;
 let reconnectDelay = 1000;
 let reconnectTimer = null;
 
@@ -438,17 +439,21 @@ function updateStatus(status, text) {
 function updateUpstreamStatus(data) {
     switch (data.upstream_state) {
         case 'connected':
+            streamEnded = false;
             updateStatus('connected');
             break;
         case 'connecting':
+            streamEnded = false;
             updateStatus('connecting');
             break;
         case 'ended':
+            streamEnded = true;
             updateStatus('disconnected', 'Stream ended');
             stopReconnectTimer();
             break;
         case 'disconnected':
         default:
+            streamEnded = false;
             updateStatus('connecting', 'Waiting for stream...');
             break;
     }
@@ -606,6 +611,7 @@ function connect() {
     }
 
     userRequestedDisconnect = false;
+    streamEnded = false;
     stopReconnectTimer();
 
     updateStatus('connecting');
@@ -679,6 +685,12 @@ function connect() {
 
             if (userRequestedDisconnect) {
                 updateStatus('disconnected', 'Disconnected');
+                return;
+            }
+
+            if (streamEnded) {
+                updateStatus('disconnected', 'Stream ended');
+                stopReconnectTimer();
                 return;
             }
 
