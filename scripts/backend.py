@@ -333,13 +333,12 @@ async def publish_features(
                 total_samples = state.total_samples
 
             if upstream_state != last_sent_status:
-                status_payload = {
-                    "type": "status",
-                    "upstream_connected": connected,
-                    "upstream_state": upstream_state,
-                    "total_samples": int(total_samples),
-                }
-                await server.broadcast(orjson.dumps(status_payload).decode())
+                await publish_upstream_status(
+                    server,
+                    connected=connected,
+                    upstream_state=upstream_state,
+                    total_samples=total_samples,
+                )
                 last_sent_status = upstream_state
 
             if result is not None and t != last_sent_t:
@@ -374,11 +373,28 @@ async def publish_features(
             logger.error(f"Feature publish error: {e}")
 
 
+async def publish_upstream_status(
+    server: BrowserServer,
+    *,
+    connected: bool,
+    upstream_state: UpstreamState,
+    total_samples: int,
+) -> None:
+    status_payload = {
+        "type": "status",
+        "upstream_connected": connected,
+        "upstream_state": upstream_state,
+        "total_samples": int(total_samples),
+    }
+    await server.broadcast(orjson.dumps(status_payload).decode())
+
+
 async def run_server_tasks(
     *,
     uvicorn_server: _ServableServer,
     upstream_coro: Coroutine[Any, Any, None],
     output_coro: Coroutine[Any, Any, None],
+    on_upstream_done: Coroutine[Any, Any, None] | None = None,
 ) -> None:
     """Run uvicorn + backend tasks and stop server when upstream finishes."""
     serve_task = asyncio.create_task(uvicorn_server.serve())
@@ -392,6 +408,8 @@ async def run_server_tasks(
 
     if upstream_task in done:
         await upstream_task
+        if on_upstream_done is not None:
+            await on_upstream_done
         if not serve_task.done():
             uvicorn_server.should_exit = True
         await serve_task
@@ -584,11 +602,24 @@ def main(
         else:
             output_coro = broadcast_loop(server, state)
 
+        async def publish_final_status() -> None:
+            async with state.lock:
+                connected = state.connected_to_upstream
+                upstream_state = state.upstream_state
+                total_samples = state.total_samples
+            await publish_upstream_status(
+                server,
+                connected=connected,
+                upstream_state=upstream_state,
+                total_samples=total_samples,
+            )
+
         try:
             await run_server_tasks(
                 uvicorn_server=uvicorn_server,
                 upstream_coro=upstream_coro,
                 output_coro=output_coro,
+                on_upstream_done=publish_final_status(),
             )
         except asyncio.CancelledError:
             logger.info("Shutting down...")

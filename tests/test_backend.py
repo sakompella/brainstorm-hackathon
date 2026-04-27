@@ -570,12 +570,20 @@ class TestRunServerTasks:
             while True:
                 await asyncio.sleep(1.0)
 
+        final_status_sent = False
+
+        async def send_final_status() -> None:
+            nonlocal final_status_sent
+            final_status_sent = True
+
         await run_server_tasks(
             uvicorn_server=server,
             upstream_coro=upstream_once(),
             output_coro=never_ending_output(),
+            on_upstream_done=send_final_status(),
         )
 
+        assert final_status_sent is True
         assert server.should_exit is True
         assert server.serve_finished.is_set()
 
