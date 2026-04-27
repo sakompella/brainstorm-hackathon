@@ -20,10 +20,12 @@ Usage:
 """
 
 import asyncio
+import contextlib
 import json
 import time
+from collections.abc import Coroutine
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
@@ -404,6 +406,39 @@ def create_fastapi_app(server: StreamingServer) -> FastAPI:
     return fastapi_app
 
 
+class _ServableServer(Protocol):
+    should_exit: bool
+
+    def serve(self) -> Coroutine[Any, Any, None]:
+        ...
+
+
+async def run_server_tasks(
+    *, uvicorn_server: _ServableServer, stream_coro: Coroutine[Any, Any, None]
+) -> None:
+    """Run uvicorn + stream tasks and stop the server when streaming finishes."""
+    serve_task = asyncio.create_task(uvicorn_server.serve())
+    stream_task = asyncio.create_task(stream_coro)
+
+    done, _ = await asyncio.wait(
+        {serve_task, stream_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+
+    if stream_task in done:
+        await stream_task
+        if not serve_task.done():
+            uvicorn_server.should_exit = True
+        await serve_task
+        return
+
+    await serve_task
+    if not stream_task.done():
+        stream_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await stream_task
+
+
 @app.command()
 def main(
     from_file: str = typer.Option(
@@ -487,10 +522,9 @@ def main(
         )
         uvicorn_server = uvicorn.Server(config)
 
-        # Start both the uvicorn server and the streaming loop
-        await asyncio.gather(
-            uvicorn_server.serve(),
-            server.stream_loop(),
+        await run_server_tasks(
+            uvicorn_server=uvicorn_server,
+            stream_coro=server.stream_loop(),
         )
 
     try:
