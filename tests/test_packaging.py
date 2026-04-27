@@ -36,6 +36,8 @@ def test_wheel_install_resolves_frontend_static_assets(tmp_path: Path) -> None:
     probe = """
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+from scripts.backend import BrowserServer, SharedState, create_app
 from scripts.static_assets import resolve_static_dir
 
 static_dir = resolve_static_dir()
@@ -43,6 +45,12 @@ for asset in ("index.html", "app.js", "style.css"):
     path = static_dir / asset
     assert path.is_file(), path
 print(static_dir)
+
+state = SharedState()
+app = create_app(state, BrowserServer(state), static_dir)
+response = TestClient(app).get("/")
+assert response.status_code == 200, response.text
+assert "Neural Data Viewer" in response.text
 """
     result = subprocess.run(
         [sys.executable, "-c", probe],
