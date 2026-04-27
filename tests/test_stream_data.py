@@ -82,14 +82,14 @@ def test_no_loop_streamer_exits_after_finite_file(tmp_path: Path) -> None:
     )
     try:
         stdout, stderr = process.communicate(timeout=10.0)
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as err:
         _terminate(process)
         stdout, stderr = process.communicate(timeout=2.0)
         raise AssertionError(
             "no-loop streamer did not exit after reaching the end of the file\n"
             f"stdout:\n{stdout}\n"
             f"stderr:\n{stderr}"
-        )
+        ) from err
 
     assert process.returncode == 0, (
         f"streamer exited with {process.returncode}\n"
