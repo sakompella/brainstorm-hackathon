@@ -7,9 +7,10 @@
   interface Props {
     features: FeaturesMessage | null;
     onAnalysis?: (analysis: FrameAnalysis) => void;
+    onFps?: (fps: number) => void;
   }
 
-  let { features, onAnalysis }: Props = $props();
+  let { features, onAnalysis, onFps }: Props = $props();
 
   let canvasEl: HTMLCanvasElement;
   let ctx: CanvasRenderingContext2D | null = null;
@@ -83,10 +84,9 @@
       fps = frameCount;
       frameCount = 0;
       lastFpsTime = now;
+      onFps?.(fps);
     }
   });
-
-  export { fps };
 </script>
 
 <canvas bind:this={canvasEl}></canvas>
