@@ -22,6 +22,11 @@
       inputs.uv2nix.follows = "uv2nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    bun2nix = {
+      url = "github:nix-community/bun2nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = {
@@ -30,6 +35,7 @@
     pyproject-nix,
     uv2nix,
     pyproject-build-systems,
+    bun2nix,
     ...
   }: let
     inherit (nixpkgs) lib;
@@ -102,15 +108,24 @@
         pythonSet = pythonSets.${system};
         venv = pythonSet.mkVirtualEnv "brainstorm-env" workspace.deps.default;
 
+        b2n = bun2nix.packages.${system};
+
         frontend = pkgs.stdenvNoCC.mkDerivation {
           name = "brainstorm-frontend";
           src = ./frontend;
-          nativeBuildInputs = [pkgs.bun pkgs.nodejs_22];
+
+          nativeBuildInputs = [
+            b2n.hook
+          ];
+
+          bunDeps = b2n.fetchBunDeps {
+            bunNix = ./frontend/bun.nix;
+          };
+
           buildPhase = ''
-            export HOME=$TMPDIR
-            bun install --frozen-lockfile
             bun run build
           '';
+
           installPhase = ''
             mkdir -p $out
             cp -r dist/* $out/
