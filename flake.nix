@@ -104,33 +104,14 @@
 
     packages = forAllSystems (
       system: let
-        pkgs = nixpkgs.legacyPackages.${system};
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [bun2nix.overlays.default];
+        };
         pythonSet = pythonSets.${system};
         venv = pythonSet.mkVirtualEnv "brainstorm-env" workspace.deps.default;
 
-        b2n = bun2nix.packages.${system};
-
-        frontend = pkgs.stdenvNoCC.mkDerivation {
-          name = "brainstorm-frontend";
-          src = ./frontend;
-
-          nativeBuildInputs = [
-            b2n.hook
-          ];
-
-          bunDeps = b2n.fetchBunDeps {
-            bunNix = ./frontend/bun.nix;
-          };
-
-          buildPhase = ''
-            bun run build
-          '';
-
-          installPhase = ''
-            mkdir -p $out
-            cp -r dist/* $out/
-          '';
-        };
+        frontend = pkgs.callPackage ./nix/frontend.nix {};
         
         brainstorm-py-app = name:
           pkgs.writeShellScriptBin "${name}" ''

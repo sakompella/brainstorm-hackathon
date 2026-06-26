@@ -2,6 +2,11 @@
 # Nix builder
 FROM nixos/nix:latest AS builder
 
+# Add nix-community cache for bun2nix
+RUN mkdir -p /etc/nix && \
+    echo 'extra-substituters = https://nix-community.cachix.org' >> /etc/nix/nix.conf && \
+    echo 'extra-trusted-public-keys = nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs=' >> /etc/nix/nix.conf
+
 # Copy our source and setup our working dir.
 COPY . /tmp/build
 WORKDIR /tmp/build
