@@ -257,16 +257,17 @@ main {
 }
 
 .sidebar .signal-monitor {
-    flex: 1;
-    min-height: 220px;
+    flex: 0 0 auto;
+    min-height: 260px;
     display: flex;
     flex-direction: column;
     gap: 8px;
 }
 
 .signal-monitor canvas {
-    flex: 1;
-    min-height: 120px;
+    flex: 0 0 auto;
+    height: clamp(180px, 24vh, 260px);
+    min-height: 180px;
     width: 100%;
     display: block;
     background: var(--bg-primary);
