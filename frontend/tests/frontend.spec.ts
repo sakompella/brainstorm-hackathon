@@ -141,15 +141,15 @@ test.describe("Time series canvas", () => {
   });
 });
 
-// ── 6. Coverage card ─────────────────────────────────────────────────────────
+// ── 6. Centering card ────────────────────────────────────────────────────────
 
-test.describe("Coverage card", () => {
-  test("coverage text matches format 'Coverage: X.X%'", async ({ page }) => {
+test.describe("Centering card", () => {
+  test("centering text matches format 'X.X% centered'", async ({ page }) => {
     const body = page.locator(".card-coverage .card-body");
-    await expect(body).toHaveText(/^Coverage: \d+\.\d+%$/);
+    await expect(body).toHaveText(/^\d+\.\d+% centered$/);
   });
 
-  test("coverage card body is non-empty", async ({ page }) => {
+  test("centering card body is non-empty", async ({ page }) => {
     const body = page.locator(".card-coverage .card-body");
     const text = await body.textContent();
     expect(text).toBeTruthy();
@@ -193,7 +193,7 @@ test.describe("FPS and channel count", () => {
 // ── Adversarial tests (QA-discovered) ────────────────────────────────────────
 
 test.describe("Adversarial / QA checks", () => {
-  // Known issue: CoverageCard and MoveCard both render <h1> wrappers, so the
+  // Known issue: CenteringCard and MoveCard both render <h1> wrappers, so the
   // page has 3 h1 elements instead of 1. Tracked here; fix before removing fixme.
   test.fixme(
     "only one h1 element on the page",
