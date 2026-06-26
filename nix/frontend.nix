@@ -13,11 +13,11 @@ stdenv.mkDerivation {
     bunNix = ../frontend/bun.nix;
   };
 
-  # Use hoisted linker to avoid EPERM in Nix sandbox
+  # Use hoisted linker + hardlink backend to avoid EPERM in Nix sandbox
   bunInstallFlags =
     if stdenv.hostPlatform.isDarwin
     then ["--linker=hoisted" "--backend=copyfile"]
-    else ["--linker=hoisted"];
+    else ["--linker=hoisted" "--backend=hardlink"];
 
   buildPhase = ''
     bun run build
