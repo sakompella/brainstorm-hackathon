@@ -308,6 +308,87 @@ Verify that your solution:
 - Maintains real-time performance
 - Provides useful guidance
 
+## Frontend Development
+
+The visualization UI lives in `frontend/` and is a **Svelte 5 + TypeScript** application built with **Vite**.
+
+### Prerequisites
+
+- [bun](https://bun.sh) (fast JS runtime and package manager): `curl -fsSL https://bun.sh/install | bash`
+
+### Install dependencies
+
+```bash
+cd frontend && bun install
+```
+
+### Development server (hot reload)
+
+```bash
+cd frontend && bun run dev
+```
+
+Starts the Vite dev server at **http://localhost:5173**. WebSocket requests to `/ws` and HTTP requests to `/health` are automatically proxied to the backend at `:8000`, so the dev server works seamlessly with `uv run brainstorm-backend`.
+
+### Production build
+
+```bash
+cd frontend && bun run build
+```
+
+Compiles TypeScript, bundles assets, and outputs to **`frontend/dist/`**. The backend (`brainstorm-backend`) automatically serves `frontend/dist/` as its static root when it exists, so the built frontend is available at **http://localhost:8000**.
+
+### Type checking
+
+```bash
+cd frontend && bun run check
+```
+
+Runs `svelte-check` for TypeScript and Svelte template type errors. Fix all errors before committing frontend changes.
+
+### Typical frontend dev flow
+
+```bash
+# Terminal 1: data streamer
+uv run brainstorm-stream --from-file data/hard/
+
+# Terminal 2: unified backend (WS processing + REST)
+uv run brainstorm-backend --upstream-url ws://localhost:8765
+
+# Terminal 3: frontend dev server (proxies /ws → :8000)
+cd frontend && bun run dev
+# Open http://localhost:5173
+```
+
+### Project structure
+
+```
+frontend/
+  index.html              # Entry HTML
+  vite.config.ts          # Svelte plugin + /ws dev proxy + build output
+  src/
+    main.ts               # Mount App into #app
+    App.svelte            # Root layout
+    app.css               # Global styles (CSS custom properties, layout)
+    lib/
+      types.ts            # WS protocol message types + domain types
+      colormap.ts         # Magma LUT + value-to-color mapping (pure)
+      analysis.ts         # Direction classification, alignment, dB math (pure)
+      timeseries-buffer.ts  # Bounded FIFO buffer for time series
+      ws.svelte.ts        # WebSocket client with $state stores
+      renderers/
+        heatmap.ts        # Imperative heatmap canvas draw function
+        timeseries.ts     # Imperative time-series canvas draw function
+    components/
+      StatusBar.svelte    # Connection status + time + FPS
+      HeatmapCanvas.svelte  # DPR-aware canvas wrapper for heatmap
+      CoverageCard.svelte   # Coverage percentage display
+      MoveCard.svelte       # Direction instruction display
+      TimeSeriesCanvas.svelte  # DPR-aware canvas for EKG plot
+```
+
+---
+
 ## Step 7: Prepare for Live Evaluation
 
 See [Submissions](submissions.md) for the complete live evaluation workflow, including:

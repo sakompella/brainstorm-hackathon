@@ -1,4 +1,4 @@
-# CLAUDE.md (Updated Jan 23, 2026)
+# CLAUDE.md (Updated Jun 26, 2026)
 
 Guidance for Claude Code (claude.ai/code) when working inside this repository. Keep this file in sync with the current toolchain and architecture described below.
 
@@ -9,15 +9,18 @@ BrainStorm 2026 Track 2: build a real-time visualization tool to guide neurosurg
 ## Daily Workflow
 
 ```bash
-# Install deps + git hooks
+# Install Python deps + git hooks
 make install
+
+# Install frontend deps (requires bun)
+cd frontend && bun install && cd ..
 
 # Download datasets (start with super_easy, iterate on hard)
 uv run python -m scripts.download super_easy
 uv run python -m scripts.download hard
 
 # Option A: Quick start with start_all.sh (recommended for development)
-# Starts all services: stream_data.py, middleware, and unified backend
+# Builds frontend, then starts all services: stream_data.py, middleware, and unified backend
 ./start_all.sh
 
 # Option B: Manual service startup
@@ -29,6 +32,11 @@ uv run brainstorm-backend --upstream-url ws://localhost:8765
 
 # Terminal 3 (optional): Run middleware on :8787
 uv run python run_middleware.py
+
+# Terminal 4 (optional): Frontend dev server with hot reload @ :5173
+cd frontend && bun run dev
+# Or build for production (output served by backend at :8000):
+cd frontend && bun run build
 
 # Validation helpers
 make format       # ruff format
@@ -49,7 +57,7 @@ make check-all    # run format + lint + type + tests
 - `scripts/serve.py` — FastAPI static server wrapping `frontend/` (legacy, for direct browser-to-stream connection).
 - `scripts/download.py` — HuggingFace helper for datasets (`track2_data.parquet`, `metadata.json`, `ground_truth.parquet`).
 - `scripts/control_client.py` — Sends keyboard commands during live evaluation.
-- `frontend/` — Main visualization UI (served from backend.py or serve.py).
+- `frontend/` — **Svelte 5 + TypeScript** app built with Vite. Sources in `frontend/src/`; `bun run build` outputs to `frontend/dist/`, which backend serves statically.
 - `docs/` — Authoritative specs (overview, data_stream protocol, submission rules, persona, etc.). Always check docs before changing behavior.
 
 ## WebSocket Protocols
@@ -123,7 +131,7 @@ from collections.abc import Callable, Iterator
 - Type checking limited to `scripts/` (run `make type-check`).
 - Tests via `pytest` (extend as needed for new backend/frontend logic).
 - Use `uv run <command>` to ensure virtualenv consistency.
-- For frontend work, keep `frontend/` build-less; if introducing bundlers, document steps in `docs/getting_started.md` and update this file.
+- Frontend uses **bun** as the package manager and runtime. Key commands: `bun install`, `bun run dev`, `bun run build`, `bun run check` (svelte-check). See `docs/getting_started.md` for the full frontend dev workflow.
 
 Keep AGENTS.md updated whenever workflows, commands, or architecture change.
 Thanks! 🚀
