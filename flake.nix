@@ -105,9 +105,15 @@
         frontend = pkgs.stdenvNoCC.mkDerivation {
           name = "brainstorm-frontend";
           src = ./frontend;
+          nativeBuildInputs = [pkgs.bun pkgs.nodejs_22];
+          buildPhase = ''
+            export HOME=$TMPDIR
+            bun install --frozen-lockfile
+            bun run build
+          '';
           installPhase = ''
             mkdir -p $out
-            cp -r $src/* $out/
+            cp -r dist/* $out/
           '';
         };
         
