@@ -17,7 +17,7 @@ stdenv.mkDerivation {
   bunInstallFlags =
     if stdenv.hostPlatform.isDarwin
     then ["--linker=hoisted" "--backend=copyfile"]
-    else ["--linker=hoisted" "--backend=hardlink"];
+    else ["--linker=hoisted" "--backend=symlink"];
 
   buildPhase = ''
     bun run build
