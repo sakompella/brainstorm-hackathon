@@ -16,8 +16,9 @@ export function classifyDirection(
   gridCols: number,
 ): { direction: Direction; magnitude: number } {
   const [cy, cx] = centroid;
-  const centerRow = gridRows / 2;
-  const centerCol = gridCols / 2;
+  // Geometric center matches the backend's definition: (n - 1) / 2.
+  const centerRow = (gridRows - 1) / 2;
+  const centerCol = (gridCols - 1) / 2;
   const vecX = cx - centerCol;
   const vecY = cy - centerRow;
   const mag = Math.sqrt(vecX ** 2 + vecY ** 2);

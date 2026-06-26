@@ -89,9 +89,10 @@ export function drawHeatmap(input: HeatmapDrawInput): void {
   ctx.arc(centerX, centerY, Math.max(15, cellSize * 1.5), 0, 2 * Math.PI);
   ctx.stroke();
 
-  // Guidance arrow (from array center to centroid)
-  const arrayCenterRow = rows / 2;
-  const arrayCenterCol = cols / 2;
+  // Guidance arrow (from array center to centroid).
+  // Center matches the backend's definition: (n - 1) / 2.
+  const arrayCenterRow = (rows - 1) / 2;
+  const arrayCenterCol = (cols - 1) / 2;
   const vecX = cx - arrayCenterCol;
   const vecY = cy - arrayCenterRow;
   const mag = Math.sqrt(vecX ** 2 + vecY ** 2);

@@ -99,9 +99,10 @@ export function createWsStore(): WsStore {
           break;
         case "features":
           features = data;
-          // Receiving features implies upstream is connected,
-          // even if we missed the explicit status message
-          if (status !== "connected") {
+          // Receiving features implies upstream is connected, even if we
+          // missed the explicit status message. Don't override a terminal
+          // "ended" state, and ignore a final zero-confidence frame.
+          if (status !== "connected" && !streamEnded && data.confidence > 0) {
             setStatus("connected");
           }
           break;
@@ -118,6 +119,15 @@ export function createWsStore(): WsStore {
     if (status === "connected" && ws) {
       userRequestedDisconnect = true;
       ws.close();
+      return;
+    }
+
+    // Avoid opening a second socket if one is already pending/open.
+    if (
+      ws &&
+      (ws.readyState === WebSocket.CONNECTING ||
+        ws.readyState === WebSocket.OPEN)
+    ) {
       return;
     }
 

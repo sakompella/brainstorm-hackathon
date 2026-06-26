@@ -18,10 +18,9 @@
   let cssHeight = 0;
   let valueRange: ValueRange = { vMin: 0, vMax: 0.01 };
 
-  // FPS tracking
+  // FPS tracking (reported to parent via onFps)
   let frameCount = 0;
   let lastFpsTime = performance.now();
-  let fps = $state(0);
 
   onMount(() => {
     ctx = canvasEl.getContext("2d");
@@ -81,10 +80,10 @@
     frameCount++;
     const now = performance.now();
     if (now - lastFpsTime >= 1000) {
-      fps = frameCount;
+      const measured = frameCount;
       frameCount = 0;
       lastFpsTime = now;
-      onFps?.(fps);
+      onFps?.(measured);
     }
   });
 </script>
