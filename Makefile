@@ -115,7 +115,7 @@ test-cov:
 check-all: format lint type-check test
 
 # Frontend
-.PHONY: frontend-install frontend-dev frontend-build frontend-check
+.PHONY: frontend-install frontend-dev frontend-build frontend-check frontend-test
 
 frontend-install:
 	cd frontend && bun install
@@ -128,6 +128,9 @@ frontend-build:
 
 frontend-check:
 	cd frontend && bun run check
+
+frontend-test:
+	cd frontend && bunx playwright test
 
 # Clean up Python cache files
 clean:
