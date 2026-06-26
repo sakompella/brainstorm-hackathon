@@ -99,6 +99,11 @@ export function createWsStore(): WsStore {
           break;
         case "features":
           features = data;
+          // Receiving features implies upstream is connected,
+          // even if we missed the explicit status message
+          if (status !== "connected") {
+            setStatus("connected");
+          }
           break;
         case "sample_batch":
           // passthrough mode — not handled by this UI

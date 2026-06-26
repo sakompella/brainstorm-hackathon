@@ -39,7 +39,7 @@
       }
     });
 
-    observer.observe(canvasEl.parentElement!);
+    observer.observe(canvasEl);
     return () => observer.disconnect();
   });
 
