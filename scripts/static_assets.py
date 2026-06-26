@@ -13,6 +13,9 @@ def resolve_static_dir(static_dir: str | Path = DEFAULT_STATIC_DIR) -> Path:
     resolved = requested if requested.is_absolute() else Path.cwd() / requested
 
     if resolved.exists():
+        dist = resolved / "dist"
+        if dist.exists():
+            return dist
         return resolved
 
     if requested == Path(DEFAULT_STATIC_DIR):

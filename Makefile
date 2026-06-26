@@ -114,6 +114,21 @@ test-cov:
 # Run all checks
 check-all: format lint type-check test
 
+# Frontend
+.PHONY: frontend-install frontend-dev frontend-build frontend-check
+
+frontend-install:
+	cd frontend && bun install
+
+frontend-dev:
+	cd frontend && bun run dev
+
+frontend-build:
+	cd frontend && bun run build
+
+frontend-check:
+	cd frontend && bun run check
+
 # Clean up Python cache files
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +

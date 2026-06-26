@@ -15,6 +15,15 @@ else
     echo "Data already present at $DATA_DIR"
 fi
 
+# Build frontend if bun is available
+if command -v bun >/dev/null 2>&1 && [ -f frontend/package.json ]; then
+    echo "Building frontend..."
+    cd frontend && bun install && bun run build && cd ..
+    echo "Frontend built."
+else
+    echo "Skipping frontend build (bun not found or frontend/package.json missing)"
+fi
+
 # Kill existing processes
 echo "Cleaning up..."
 lsof -ti:8765,8000 2>/dev/null | xargs kill -9 2>/dev/null || true
