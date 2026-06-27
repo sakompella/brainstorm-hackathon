@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
-import pandas as pd
+import pyarrow.parquet as pq
 import typer
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -64,44 +64,92 @@ def generate_channel_coords(grid_size: int = 32) -> np.ndarray:
 # =============================================================================
 
 
-class FileSampleProvider:
-    """Provides samples from a pre-generated parquet file."""
+class ParquetSampleProvider:
+    """Provides samples from a parquet file without loading it all into memory."""
 
     def __init__(
         self,
-        data: np.ndarray,
+        data_path: Path,
         fs: float,
         loop: bool = True,
+        read_batch_size: int = 10,
     ):
-        self.data = data
+        self.data_path = data_path
         self.fs = fs
         self.loop = loop
-        self.n_samples = data.shape[0]
+        self.read_batch_size = read_batch_size
+        self.parquet_file = pq.ParquetFile(data_path)
+        self.channel_names = [
+            name for name in self.parquet_file.schema.names if name != "time_s"
+        ]
+        self.n_samples = self.parquet_file.metadata.num_rows
+        self.n_channels = len(self.channel_names)
         self.current_idx = 0
+        self._batch_iter = self._new_batch_iter()
+        self._buffer = np.empty((0, self.n_channels), dtype=np.float32)
+        self._buffer_idx = 0
 
         # Stats tracking
         self._recent_min = float("inf")
         self._recent_max = float("-inf")
 
+    def _new_batch_iter(self) -> Any:
+        return self.parquet_file.iter_batches(
+            batch_size=self.read_batch_size,
+            columns=self.channel_names,
+        )
+
+    def _load_next_buffer(self) -> bool:
+        """Load the next parquet batch into memory; return False at EOF."""
+        while True:
+            try:
+                record_batch = next(self._batch_iter)
+            except StopIteration:
+                if not self.loop:
+                    self._buffer = np.empty((0, self.n_channels), dtype=np.float32)
+                    self._buffer_idx = 0
+                    return False
+                self.current_idx = 0
+                self._batch_iter = self._new_batch_iter()
+                continue
+
+            columns = [
+                column.to_numpy(zero_copy_only=False)
+                for column in record_batch.columns
+            ]
+            self._buffer = np.column_stack(columns).astype(np.float32, copy=False)
+            self._buffer_idx = 0
+            return self._buffer.shape[0] > 0
+
     def get_next_batch(self, batch_size: int) -> tuple[list[list[float]], float]:
         """Get next batch of samples from the file."""
         start_time_s = self.current_idx / self.fs
+        batch_samples: list[list[float]] = []
 
-        batch_samples = []
-        for _ in range(batch_size):
-            sample = self.data[self.current_idx]
-            batch_samples.append(sample.tolist())
+        while len(batch_samples) < batch_size:
+            if self._buffer_idx >= self._buffer.shape[0] and not self._load_next_buffer():
+                break
 
-            # Track stats
-            self._recent_min = min(self._recent_min, float(sample.min()))
-            self._recent_max = max(self._recent_max, float(sample.max()))
+            needed = batch_size - len(batch_samples)
+            available = self._buffer.shape[0] - self._buffer_idx
+            take = min(needed, available)
+            if take <= 0:
+                break
 
-            self.current_idx += 1
+            chunk = self._buffer[self._buffer_idx : self._buffer_idx + take]
+            batch_samples.extend(chunk.tolist())
+            self._recent_min = min(self._recent_min, float(chunk.min()))
+            self._recent_max = max(self._recent_max, float(chunk.max()))
+            self._buffer_idx += take
+            self.current_idx += take
+
             if self.current_idx >= self.n_samples:
                 if self.loop:
                     self.current_idx = 0
+                    self._batch_iter = self._new_batch_iter()
+                    self._buffer = np.empty((0, self.n_channels), dtype=np.float32)
+                    self._buffer_idx = 0
                 else:
-                    # Stop at end of file
                     break
 
         return batch_samples, start_time_s
@@ -182,7 +230,7 @@ class StreamingServer:
         host: str,
         port: int,
         channels_coords: np.ndarray,
-        sample_provider: FileSampleProvider,
+        sample_provider: ParquetSampleProvider,
         fs: float,
         batch_size: int = 10,
     ):
@@ -350,15 +398,15 @@ class StreamingServer:
         self.running = False
 
 
-def load_data(data_dir: Path) -> tuple[np.ndarray, float, dict[str, Any]]:
+def load_metadata(data_dir: Path) -> tuple[Path, float, dict[str, Any]]:
     """
-    Load neural data and metadata from a dataset directory.
+    Load dataset metadata without loading parquet data into memory.
 
     Args:
         data_dir: Path to directory containing track2_data.parquet and metadata.json
 
     Returns:
-        Tuple of (data array, sampling rate, metadata dict)
+        Tuple of (data path, sampling rate, metadata dict)
     """
     data_path = data_dir / "track2_data.parquet"
     metadata_path = data_dir / "metadata.json"
@@ -366,7 +414,6 @@ def load_data(data_dir: Path) -> tuple[np.ndarray, float, dict[str, Any]]:
     if not data_path.exists():
         raise FileNotFoundError(f"Data file not found: {data_path}")
 
-    # Load metadata
     metadata: dict[str, Any] = {}
     if metadata_path.exists():
         with open(metadata_path) as f:
@@ -378,12 +425,7 @@ def load_data(data_dir: Path) -> tuple[np.ndarray, float, dict[str, Any]]:
             f"[yellow]Warning:[/yellow] metadata.json not found, assuming fs={fs} Hz"
         )
 
-    # Load data
-    console.print(f"[dim]Loading data from {data_path}...[/dim]")
-    data_df = pd.read_parquet(data_path)
-    data = data_df.values.astype(np.float32)
-
-    return data, fs, metadata
+    return data_path, fs, metadata
 
 
 def create_fastapi_app(server: StreamingServer) -> FastAPI:
@@ -475,24 +517,23 @@ def main(
         )
         raise typer.Exit(code=1)
 
-    # Load data
+    # Load metadata and create chunked sample provider.
     try:
-        data, fs, _ = load_data(data_dir)
+        data_path, fs, _ = load_metadata(data_dir)
+        sample_provider = ParquetSampleProvider(data_path=data_path, fs=fs, loop=loop)
     except FileNotFoundError as e:
         console.print(f"[red]✗ Error:[/red] {e}")
         raise typer.Exit(code=1) from e
 
     console.print(
-        f"[dim]Loaded {data.shape[0]:,} samples ({data.shape[0] / fs:.1f}s) "
-        f"with {data.shape[1]} channels[/dim]"
+        f"[dim]Streaming {sample_provider.n_samples:,} samples "
+        f"({sample_provider.total_duration_s:.1f}s) with "
+        f"{sample_provider.n_channels} channels from {data_path}[/dim]"
     )
 
     # Create channel coordinates
-    grid_size = int(np.sqrt(data.shape[1]))
+    grid_size = int(np.sqrt(sample_provider.n_channels))
     channels_coords = generate_channel_coords(grid_size)
-
-    # Create sample provider
-    sample_provider = FileSampleProvider(data=data, fs=fs, loop=loop)
 
     # Print header
     print_header(host, port, fs, str(data_dir))
