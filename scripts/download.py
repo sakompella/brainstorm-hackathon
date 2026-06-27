@@ -23,7 +23,13 @@ DATA_PATH = Path("./data")
 DATASET_ID = "PrecisionNeuroscience/BrainStorm2026-track2"
 
 # Available difficulty levels
-DIFFICULTY_LEVELS = ["super_easy", "easy", "medium", "hard"]
+DIFFICULTY_LEVELS = [
+    "super_easy",
+    "super_easy_deterministic",
+    "easy",
+    "medium",
+    "hard",
+]
 
 
 def _download_file(
@@ -105,7 +111,10 @@ def _download_difficulty(
     """Download all files for a specific difficulty level."""
     _download_file(f"{difficulty}/track2_data.parquet", local_dir, token)
     _download_file(f"{difficulty}/ground_truth.parquet", local_dir, token)
-    _download_file(f"{difficulty}/README.md", local_dir, token)
+    try:
+        _download_file(f"{difficulty}/README.md", local_dir, token)
+    except Exception as e:
+        print(f"README.md not found for {difficulty}; continuing ({e})")
 
 
 def load_track2_data(

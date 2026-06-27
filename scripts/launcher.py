@@ -155,7 +155,7 @@ def main() -> None:
     ports = (8765, backend_port)
     repo_root = find_repo_root()
     args = parse_args(tuple(sys.argv[1:]))
-    data_dir = args.data_dir
+    data_dir = os.environ.get("BRAINSTORM_DATA_DIR", args.data_dir)
     data_path = repo_root / data_dir
     dataset_name = data_path.name
     use_logs = not in_container()

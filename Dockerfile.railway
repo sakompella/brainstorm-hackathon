@@ -22,6 +22,7 @@ ENV PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
     HF_HOME=/tmp/hf_cache \
     CONTAINER=1 \
+    BRAINSTORM_DATA_DIR=data/super_easy_deterministic \
     BRAINSTORM_STATIC_DIR=/app/frontend/dist
 
 # Install build headers needed by pynput's evdev dependency.
