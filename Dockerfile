@@ -89,6 +89,6 @@ ENV HOME="/root"
 ENV HF_HOME="/tmp/hf_cache"
 ENV CONTAINER=1
 EXPOSE 8000
-# /app/data is where downloaded datasets land (repo_root falls back to cwd=/app)
-VOLUME ["/app/data"]
+# /app/data is where downloaded datasets land (repo_root falls back to cwd=/app).
+# On Railway, attach a Railway Volume at /app/data for persistence.
 CMD ["/app/bin/brainstorm-all"]
