@@ -17,6 +17,7 @@ from types import FrameType
 Process = subprocess.Popen[bytes]
 ProcessEntry = tuple[str, Process]
 DEFAULT_DATA_DIR = "data/hard"
+DEFAULT_BACKEND_PORT = 8000
 
 
 @dataclass(slots=True)
@@ -150,7 +151,8 @@ def parse_args(argv: tuple[str, ...]) -> argparse.Namespace:
 
 
 def main() -> None:
-    ports = (8765, 8000)
+    backend_port = int(os.environ.get("PORT", str(DEFAULT_BACKEND_PORT)))
+    ports = (8765, backend_port)
     repo_root = find_repo_root()
     args = parse_args(tuple(sys.argv[1:]))
     data_dir = args.data_dir
@@ -199,6 +201,8 @@ def main() -> None:
         "scripts.backend",
         "--upstream-url",
         "ws://localhost:8765",
+        "--port",
+        str(backend_port),
     ]
     static_dir = os.environ.get("BRAINSTORM_STATIC_DIR")
     if static_dir:
@@ -224,9 +228,9 @@ def main() -> None:
     Ready!
 
       Streamer:  ws://localhost:8765  (PID: {streamer_pid})
-      Backend:   http://localhost:8000 (PID: {backend_pid})
+      Backend:   http://localhost:{backend_port} (PID: {backend_pid})
 
-    Open http://localhost:8000 in your browser
+    Open http://localhost:{backend_port} in your browser
 {log_info}
     To stop: Press Ctrl+C""")
     )
