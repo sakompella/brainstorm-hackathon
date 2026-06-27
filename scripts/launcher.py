@@ -37,7 +37,7 @@ def find_repo_root() -> Path:
             check=True,
         )
         return Path(result.stdout.strip())
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         return Path.cwd()
 
 

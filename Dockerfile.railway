@@ -1,0 +1,47 @@
+# Railway-specific Dockerfile.
+#
+# The default Dockerfile uses Nix for reproducibility, but Railway's remote
+# builder has repeatedly failed inside the Nix/bun2nix frontend sandbox. This
+# file keeps Railway simple: build the Svelte frontend with Bun, then run the
+# Python backend with uv-managed wheels.
+
+FROM oven/bun:1.3.13 AS frontend-builder
+
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY frontend/ ./
+RUN bun run build
+
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS runtime
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    HF_HOME=/tmp/hf_cache \
+    CONTAINER=1 \
+    BRAINSTORM_STATIC_DIR=/app/frontend/dist
+
+# Install build headers needed by pynput's evdev dependency.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc libc6-dev linux-libc-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies first for better Docker layer caching.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Copy application code and install the project entrypoints.
+COPY scripts/ ./scripts/
+COPY README.md ./README.md
+COPY SUBMISSION.YAML ./SUBMISSION.YAML
+COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
+RUN uv sync --frozen --no-dev
+
+# Dataset files are downloaded into /app/data at runtime if absent.
+RUN mkdir -p /app/data /tmp/hf_cache
+
+EXPOSE 8000
+CMD ["/app/.venv/bin/brainstorm-all"]

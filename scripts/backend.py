@@ -41,6 +41,7 @@ import typer
 import uvicorn
 import websockets
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from websockets.exceptions import ConnectionClosedError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -142,7 +143,7 @@ class BrowserServer:
 
 
 def is_terminal_upstream_close(
-    exc: websockets.exceptions.ConnectionClosedError,
+    exc: ConnectionClosedError,
     saw_message: bool,
 ) -> bool:
     """Return whether an upstream close represents finite playback ending."""
@@ -263,7 +264,7 @@ async def consume_upstream(
 
                 clean_close = True
 
-        except websockets.exceptions.ConnectionClosedError as e:
+        except ConnectionClosedError as e:
             logger.warning(f"Upstream connection closed: {e}")
             clean_close = is_terminal_upstream_close(e, saw_message)
         except Exception as e:
