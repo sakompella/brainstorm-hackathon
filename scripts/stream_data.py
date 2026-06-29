@@ -388,10 +388,12 @@ class StreamingServer:
                 self.live.update(self.make_status_panel())
                 last_display_update = current_time
 
-            # Sleep to maintain sampling rate
+            # Sleep to maintain sampling rate. Always yield to the event loop
+            # (even when behind schedule, where sleep_time <= 0) so the uvicorn
+            # server task can bind and serve connections; broadcast() does not
+            # await when there are no clients, so this is the only yield point.
             sleep_time = expected_time - time.perf_counter() + batch_dt
-            if sleep_time > 0:
-                await asyncio.sleep(sleep_time)
+            await asyncio.sleep(max(0.0, sleep_time))
 
     def stop(self) -> None:
         """Stop the streaming server."""
